@@ -1,0 +1,4 @@
+framework:
+  serializer:
+    default_context:
+      max_depth: 1

@@ -1,0 +1,53 @@
+services:
+  app:
+    build:
+      dockerfile: ./Dockerfile
+      target: dev
+    environment:
+      - DOCKER_ENV=1
+      - PHPSTAN_PRO_WEB_PORT=11111
+      - PHP_IDE_CONFIG=serverName=127.0.0.1
+    restart: always
+    tty: true
+    ports:
+      - "9000:9000"
+      - "11111:11111"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - "./:/var/www/backend"
+      - phpstan:/tmp/phpstan-fixer
+    networks:
+      - shared_network
+    depends_on:
+      - database
+      - redis
+
+  redis:
+    image: redis:7.2.3-alpine
+    ports:
+      - "6379:6379"
+    restart: always
+    networks:
+      - shared_network
+
+  database:
+    image: postgres:16.1-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: ~
+      POSTGRES_PASSWORD: ~
+      POSTGRES_USER: ~
+    ports:
+      - "5432:5432"
+    volumes:
+      - database_data:/var/lib/postgresql/data:rw
+    networks:
+      - shared_network
+
+volumes:
+  database_data:
+  phpstan:
+
+networks:
+  shared_network:

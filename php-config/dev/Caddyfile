@@ -1,0 +1,53 @@
+{
+  debug
+  auto_https off
+  persist_config off
+  storage_check off
+  storage_clean_interval off
+  ocsp_stapling off
+  admin off
+
+  frankenphp {
+    num_threads {$PHP_NUM_THREADS:8}
+
+    worker {
+      file /var/www/backend/public/index.php
+      watch "/var/www/backend/**/*.{php,yaml,yml,twig,env}"
+      num {$PHP_WORKER_NUM:4}
+    }
+  }
+
+  servers :9000 {
+    name {$CADDY_SERVER_NAME:rest-api}
+    trusted_proxies static 127.0.0.0/8 192.168.0.0/16 172.0.0.0/8 10.0.0.0/8
+    client_ip_headers X-Forwarded-For X-Real-Ip
+  }
+
+  log default {
+    output stdout
+    format console
+    level {$CADDY_LOG_LEVEL:INFO}
+  }
+}
+
+:9000 {
+  log
+
+  header {
+    -Via
+    -Server
+    -Vary
+    -X-Debug-Token
+    -X-Locale
+    -X-Varnish
+    -X-Powered-By
+  }
+
+  root * /var/www/backend/public
+
+  php_server {
+    file_server off
+    try_files {path} index.php
+    root /var/www/backend/public
+  }
+}
