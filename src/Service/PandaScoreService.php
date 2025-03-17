@@ -1309,4 +1309,69 @@ class PandaScoreService
             }
         }
     }
+
+    /**
+     * Process player statistics data from API
+     *
+     * @param Player $player Player entity
+     * @param array $data Player stats data from API
+     * @return bool Success status
+     */
+    public function processPlayerStats(Player $player, array $data): bool
+    {
+        try {
+            // Update player with stats data
+            if (isset($data['stats'])) {
+                $player->setStats($data['stats']);
+                $this->logger->debug('Updated stats for player', [
+                    'player_id' => $player->getId(),
+                    'player_name' => $player->getName()
+                ]);
+            }
+
+            // Process last games data
+            if (isset($data['last_games']) && is_array($data['last_games'])) {
+                $player->setLastGames($data['last_games']);
+                $this->processPlayerLastGames($player, $data['last_games']);
+            }
+
+            // Update teams if available
+            if (!empty($data['teams']) && is_array($data['teams'])) {
+                foreach ($data['teams'] as $teamData) {
+                    if (empty($teamData['id'])) {
+                        continue;
+                    }
+
+                    $teamId = (string)$teamData['id'];
+                    $team = $this->teamRepository->findOneBy(['pandascoreId' => $teamId]);
+
+                    // If team doesn't exist, create it
+                    if (!$team && !empty($teamData)) {
+                        // Create new team and save
+                        $team = $this->processTeamData($teamData);
+                    }
+
+                    // Add team to player's teams if it exists and not already there
+                    if ($team && $team instanceof Team && !$player->getTeams()->contains($team)) {
+                        $player->addTeam($team);
+                    }
+                }
+            }
+
+            // Save changes
+            $this->entityManager->persist($player);
+            $this->entityManager->flush();
+
+            return true;
+        } catch (\Exception $e) {
+            $this->logger->error('Error processing player stats data', [
+                'player_id' => $player->getId(),
+                'player_name' => $player->getName(),
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return false;
+        }
+    }
 }

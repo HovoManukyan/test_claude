@@ -200,4 +200,33 @@ class PlayerRepository extends BaseRepository
 
         return $slug . '-' . $nextNumber;
     }
+
+    /**
+     * Count all players
+     */
+    public function countAll(): int
+    {
+        return (int)$this->createQueryBuilder('p')
+            ->select('COUNT(p.id)')
+            ->getQuery()
+            ->getSingleScalarResult();
+    }
+
+    /**
+     * Find players for stats fetching with optimized loading
+     *
+     * @param int $limit Maximum number of players to fetch
+     * @param int $offset Offset to start from
+     * @return Player[] Array of players
+     */
+    public function findForStatsFetch(int $limit, int $offset): array
+    {
+        return $this->createQueryBuilder('p')
+            ->select('p')
+            ->orderBy('p.id', 'ASC')
+            ->setMaxResults($limit)
+            ->setFirstResult($offset)
+            ->getQuery()
+            ->getResult();
+    }
 }
