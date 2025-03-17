@@ -1,183 +1,293 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\Command;
 
-use App\Entity\Player;
 use App\Entity\Team;
+use App\Repository\TeamRepository;
+use App\Service\PandaScoreService;
 use Doctrine\ORM\EntityManagerInterface;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 #[AsCommand(
     name: 'app:fetch-team-stats',
-    description: 'Fetch team stats from PandaScore API'
+    description: 'Fetch team stats from PandaScore API with parallel processing'
 )]
 class FetchTeamStatsCommand extends Command
 {
+    /**
+     * API endpoint URL pattern for team stats
+     */
     private const API_URL = 'https://api.pandascore.co/csgo/teams/%s/stats';
-    private const RATE_LIMIT = 2; // 2 запроса в секунду
-    private const BATCH_SIZE = 50; // Уменьшенный размер пакета для улучшенного контроля памяти
-    private const MAX_CONCURRENT_REQUESTS = 10; // Уменьшено для снижения нагрузки на память
-    private const MEMORY_THRESHOLD = 150 * 1024 * 1024; // 150MB пороговое значение памяти
+
+    /**
+     * Default batch size for processing teams
+     */
+    private const BATCH_SIZE = 50;
+
+    /**
+     * Maximum concurrent requests
+     */
+    private const MAX_CONCURRENT_REQUESTS = 10;
+
+    /**
+     * API rate limit (requests per second)
+     */
+    private const RATE_LIMIT = 2;
+
+    /**
+     * Memory threshold in MB
+     */
+    private const MEMORY_THRESHOLD = 150;
 
     public function __construct(
-        private readonly HttpClientInterface    $httpClient,
-        private readonly EntityManagerInterface $entityManager
-    )
-    {
+        private readonly PandaScoreService $pandaScoreService,
+        private readonly HttpClientInterface $httpClient,
+        private readonly TeamRepository $teamRepository,
+        private readonly EntityManagerInterface $entityManager,
+        private readonly LoggerInterface $logger,
+        private readonly string $pandascoreToken,
+    ) {
         parent::__construct();
+    }
+
+    protected function configure(): void
+    {
+        $this
+            ->addOption('batch-size', 'b', InputOption::VALUE_REQUIRED, 'Number of teams to process in one batch', self::BATCH_SIZE)
+            ->addOption('offset', 'o', InputOption::VALUE_REQUIRED, 'Starting offset (skip first N teams)', 0)
+            ->addOption('max-teams', 'm', InputOption::VALUE_REQUIRED, 'Maximum number of teams to process', PHP_INT_MAX)
+            ->addOption('concurrent', 'c', InputOption::VALUE_REQUIRED, 'Maximum concurrent requests', self::MAX_CONCURRENT_REQUESTS)
+            ->addOption('id', 'i', InputOption::VALUE_REQUIRED, 'Process only a specific team ID', null);
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
-        $io->title('Fetching team stats from PandaScore API');
+        $io->title('Fetching team stats from PandaScore API with parallel processing');
 
-        // Используем прямой SQL для получения количества
-        $conn = $this->entityManager->getConnection();
-        $totalTeams = (int)$conn->fetchOne('SELECT COUNT(id) FROM team');
+        // Set memory limit to handle large responses
+        ini_set('memory_limit', '2048M');
 
+        $batchSize = (int)$input->getOption('batch-size');
+        $offset = (int)$input->getOption('offset');
+        $maxTeams = (int)$input->getOption('max-teams');
+        $maxConcurrent = (int)$input->getOption('concurrent');
+        $specificId = $input->getOption('id');
+
+        $this->logger->info('Starting team stats fetch operation', [
+            'batch_size' => $batchSize,
+            'offset' => $offset,
+            'max_teams' => $maxTeams,
+            'max_concurrent' => $maxConcurrent,
+            'specific_id' => $specificId
+        ]);
+
+        // If a specific team ID is provided, process just that one
+        if ($specificId !== null) {
+            $team = $this->teamRepository->find($specificId);
+            if (!$team) {
+                $io->error(sprintf('Team with ID %s not found', $specificId));
+                return Command::FAILURE;
+            }
+
+            $io->section(sprintf('Processing team: %s (ID: %d)', $team->getName(), $team->getId()));
+            $result = $this->processTeam($team, $io);
+
+            if ($result) {
+                $io->success('Team stats updated successfully');
+            } else {
+                $io->error('Failed to update team stats');
+                return Command::FAILURE;
+            }
+
+            return Command::SUCCESS;
+        }
+
+        // Get total teams for progress reporting
+        $totalTeams = $this->getTotalTeams();
         if (!$totalTeams) {
             $io->warning('No teams found.');
             return Command::SUCCESS;
         }
 
-        $io->info(sprintf('Total teams to process: %d', $totalTeams));
-
-        // Обрабатываем команды пакетами
-        $offset = 0;
+        $io->info(sprintf('Found %d teams in total', $totalTeams));
         $totalProcessed = 0;
+        $successCount = 0;
+        $failureCount = 0;
+        $batchNumber = 0;
 
-        while (true) {
-            // Очищаем кэш перед загрузкой нового пакета
-            $this->entityManager->clear();
+        // Process teams in batches
+        while ($offset < $totalTeams && $totalProcessed < $maxTeams) {
+            $batchNumber++;
 
-            // Принудительный сбор мусора
-            gc_disable();
-            gc_collect_cycles();
-            gc_enable();
+            // Check memory usage before loading a new batch
+            $memoryUsage = memory_get_usage(true) / 1024 / 1024;
+            $io->info(sprintf('Memory usage before batch %d: %.2f MB', $batchNumber, $memoryUsage));
 
-            // Мониторинг памяти
-            $memoryBefore = memory_get_usage(true);
-            $io->info(sprintf('Memory usage before batch: %d MB', round($memoryBefore / 1024 / 1024)));
-
-            // Проверяем, не превышен ли порог памяти
-            if ($memoryBefore > self::MEMORY_THRESHOLD) {
+            if ($memoryUsage > self::MEMORY_THRESHOLD) {
                 $io->warning('Memory threshold reached, pausing for memory cleanup');
-                sleep(2); // Даем системе время освободить память
-                continue; // Повторяем проверку памяти без загрузки новых данных
+                $this->logger->warning('Memory threshold reached during team stats fetch', [
+                    'memory_usage_mb' => $memoryUsage,
+                    'threshold_mb' => self::MEMORY_THRESHOLD
+                ]);
+
+                // Force garbage collection
+                gc_collect_cycles();
+                sleep(2); // Give the system some time to free memory
+                continue;
             }
 
-            // Загружаем пакет команд через прямой запрос
-            $teamRows = $conn->fetchAllAssociative(
-                'SELECT id, name, pandascore_id, slug FROM team ORDER BY stats DESC LIMIT ? OFFSET ?',
-                [self::BATCH_SIZE, $offset]
-            );
+            // Determine current batch size (respecting the max teams limit)
+            $currentBatchSize = min($batchSize, $maxTeams - $totalProcessed);
 
-            if (empty($teamRows)) {
-                break;
-            }
-
-            // Преобразуем строки в объекты Team (легкие прокси)
-            $teams = [];
-            foreach ($teamRows as $row) {
-                $team = $this->entityManager->getReference(Team::class, $row['id']);
-                $teams[] = [
-                    'entity' => $team,
-                    'name' => $row['name'],
-                    'pandascore_id' => $row['pandascore_id'],
-                    'slug' => $row['slug']
-                ];
-            }
-
-            $io->info(sprintf('Processing batch of %d teams (offset: %d)...', count($teams), $offset));
-
-            // Загружаем карту игроков оптимизированным способом
-            $playersMap = $this->loadPlayersMap();
-
-            // Обрабатываем текущий пакет команд асинхронно
-            $processed = $this->processTeamsBatch($teams, $io, $playersMap);
+            $io->section(sprintf('Processing batch %d: %d teams (offset: %d)',
+                $batchNumber,
+                $currentBatchSize,
+                $offset
+            ));
 
             try {
-                // Сохраняем изменения
-                $this->entityManager->flush();
+                // Load team data for batch
+                $teamRows = $this->loadTeams($currentBatchSize, $offset);
 
-                // Явно освобождаем переменные
-                $teams = null;
-                $teamRows = null;
-                $playersMap = null;
+                if (empty($teamRows)) {
+                    $io->warning('No more teams found.');
+                    break;
+                }
 
-                // Принудительно очищаем кэш Doctrine
+                // Process the batch with parallel requests
+                $batchResults = $this->processTeamsBatch($teamRows, $maxConcurrent, $io);
+
+                $batchProcessed = $batchResults['total'];
+                $batchSuccess = $batchResults['success'];
+                $batchFailure = $batchResults['failure'];
+
+                $totalProcessed += $batchProcessed;
+                $successCount += $batchSuccess;
+                $failureCount += $batchFailure;
+
+                $offset += $currentBatchSize;
+
+                $io->success(sprintf(
+                    'Batch %d completed. Success: %d, Failures: %d. Total processed so far: %d/%d (%.1f%%)',
+                    $batchNumber,
+                    $batchSuccess,
+                    $batchFailure,
+                    $totalProcessed,
+                    min($totalTeams, $maxTeams),
+                    ($totalProcessed / min($totalTeams, $maxTeams)) * 100
+                ));
+
+                // Clear entity manager to free memory
                 $this->entityManager->clear();
 
-                // Принудительный сбор мусора
-                gc_disable();
+                // Force garbage collection
                 gc_collect_cycles();
-                gc_enable();
+
+                // Sleep between batches to allow system to recover
+                sleep(1);
             } catch (\Exception $e) {
-                $io->error('Error during flush: ' . $e->getMessage());
-                return Command::FAILURE;
+                $this->logger->error('Error processing batch', [
+                    'batch' => $batchNumber,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString()
+                ]);
+
+                $io->error(sprintf('Error processing batch %d: %s', $batchNumber, $e->getMessage()));
+
+                // Continue with next batch rather than failing completely
+                $offset += $currentBatchSize;
+                $failureCount += $currentBatchSize;
             }
-
-            $offset += self::BATCH_SIZE;
-            $totalProcessed += $processed;
-
-            $memoryAfter = memory_get_usage(true);
-            $io->info(sprintf('Memory usage after batch: %d MB, diff: %d MB',
-                round($memoryAfter / 1024 / 1024),
-                round(($memoryAfter - $memoryBefore) / 1024 / 1024)
-            ));
-
-            $io->info(sprintf('Progress: %d/%d teams processed (%.2f%%)',
-                $totalProcessed,
-                $totalTeams,
-                ($totalProcessed / $totalTeams) * 100
-            ));
-
-            // Дополнительная пауза между пакетами для освобождения ресурсов
-            usleep(200000); // 200 мс
         }
 
-        $io->success(sprintf('All team stats fetched. Total processed: %d', $totalProcessed));
+        if ($failureCount > 0) {
+            $io->warning(sprintf('%d teams failed to process', $failureCount));
+        }
+
+        $io->success(sprintf('Processing complete. Successfully processed %d/%d teams.',
+            $successCount,
+            $totalProcessed
+        ));
+
+        $this->logger->info('Team stats fetch operation completed', [
+            'total_processed' => $totalProcessed,
+            'successes' => $successCount,
+            'failures' => $failureCount
+        ]);
 
         return Command::SUCCESS;
     }
 
-    private function processTeamsBatch(array $teams, SymfonyStyle $io, array $playersMap): int
+    /**
+     * Load teams for batch processing
+     */
+    private function loadTeams(int $limit, int $offset): array
+    {
+        $conn = $this->entityManager->getConnection();
+        return $conn->fetchAllAssociative(
+            'SELECT id, name, pandascore_id, slug FROM team ORDER BY id ASC LIMIT ? OFFSET ?',
+            [$limit, $offset]
+        );
+    }
+
+    /**
+     * Process a batch of teams with parallel requests
+     */
+    private function processTeamsBatch(array $teamRows, int $maxConcurrent, SymfonyStyle $io): array
     {
         $pendingRequests = [];
         $activeRequests = [];
         $teamMap = [];
         $processed = 0;
+        $success = 0;
+        $failure = 0;
         $lastRequestTime = 0;
         $requestId = 0;
 
-        // Подготовка всех запросов
-        foreach ($teams as $teamData) {
+        // Prepare requests for all teams in the batch
+        foreach ($teamRows as $teamData) {
+            if (empty($teamData['pandascore_id'])) {
+                $io->warning(sprintf('Team %s has no PandaScore ID, skipping', $teamData['name']));
+                $processed++;
+                $failure++;
+                continue;
+            }
+
             $pendingRequests[] = [
-                'team' => $teamData['entity'],
+                'team_id' => $teamData['id'],
                 'name' => $teamData['name'],
                 'url' => sprintf(self::API_URL, $teamData['pandascore_id'])
             ];
         }
 
-        // Обработка запросов асинхронно с соблюдением лимита скорости
+        // Process requests in parallel
         while (!empty($pendingRequests) || !empty($activeRequests)) {
-            // Мониторинг памяти внутри цикла
-            if ($processed > 0 && $processed % 5 === 0) {
-                $io->info(sprintf('Memory usage during processing: %d MB',
-                    round(memory_get_usage(true) / 1024 / 1024)));
+            // Monitor memory usage
+            if ($processed > 0 && $processed % 10 === 0) {
+                $memoryUsage = memory_get_usage(true) / 1024 / 1024;
+                $io->note(sprintf('Memory usage during processing: %.2f MB', $memoryUsage));
+
+                if ($memoryUsage > self::MEMORY_THRESHOLD) {
+                    $io->warning('High memory usage, forcing garbage collection');
+                    gc_collect_cycles();
+                    sleep(1); // Brief pause to let system recover
+                }
             }
 
-            // Запускаем новые запросы с учетом ограничения скорости
+            // Add new requests up to the concurrent limit
             $now = microtime(true);
-            while (!empty($pendingRequests) && count($activeRequests) < self::MAX_CONCURRENT_REQUESTS) {
-                // Соблюдаем ограничение RateLimit
+            while (!empty($pendingRequests) && count($activeRequests) < $maxConcurrent) {
+                // Respect rate limit
                 if ($now - $lastRequestTime < (1 / self::RATE_LIMIT)) {
                     $sleepTime = (1 / self::RATE_LIMIT) - ($now - $lastRequestTime);
                     usleep((int)($sleepTime * 1_000_000));
@@ -185,16 +295,17 @@ class FetchTeamStatsCommand extends Command
                 }
 
                 $request = array_shift($pendingRequests);
-                $team = $request['team'];
+                $teamId = $request['team_id'];
                 $teamName = $request['name'];
 
                 try {
-                    // Создаем уникальный ID для запроса
-                    $currentRequestId = 'request_' . $requestId++;
+                    $currentRequestId = "request_" . $requestId++;
+
+                    $io->text(sprintf('Sending request for team: %s (ID: %s)', $teamName, $teamId));
 
                     $response = $this->httpClient->request('GET', $request['url'], [
                         'headers' => [
-                            'Authorization' => 'Bearer ' . $_ENV['PANDASCORE_TOKEN'],
+                            'Authorization' => 'Bearer ' . $this->pandascoreToken,
                             'Accept' => 'application/json',
                         ],
                         'timeout' => 30,
@@ -202,412 +313,152 @@ class FetchTeamStatsCommand extends Command
                     ]);
 
                     $activeRequests[$currentRequestId] = $response;
-                    $teamMap[$currentRequestId] = $team;
-
-                    $io->text(sprintf('Request sent for team %s', $teamName));
+                    $teamMap[$currentRequestId] = $teamId;
                     $lastRequestTime = microtime(true);
                 } catch (\Exception $e) {
-                    $io->error(sprintf(
-                        'Error requesting stats for team %s: %s',
-                        $teamName,
-                        $e->getMessage()
-                    ));
+                    $this->logger->error('Error requesting team stats', [
+                        'team_id' => $teamId,
+                        'team_name' => $teamName,
+                        'error' => $e->getMessage(),
+                    ]);
+
+                    $io->error(sprintf('Error requesting stats for team %s: %s', $teamName, $e->getMessage()));
+
+                    $processed++;
+                    $failure++;
                 }
             }
 
-            // Проверяем завершенные запросы
-            foreach ($this->httpClient->stream($activeRequests) as $response => $chunk) {
-                if ($chunk->isLast()) {
-                    try {
-                        // Получаем ID из user_data
-                        $id = $response->getInfo('user_data');
-                        $team = $teamMap[$id];
+            // Check for completed requests
+            if (!empty($activeRequests)) {
+                foreach ($this->httpClient->stream($activeRequests) as $response => $chunk) {
+                    if ($chunk->isLast()) {
+                        try {
+                            // Get request ID and team ID
+                            $id = $response->getInfo('user_data');
+                            $teamId = $teamMap[$id];
 
-                        // Важно - удаляем ссылку на объект из массивов сразу
-                        unset($activeRequests[$id]);
-                        unset($teamMap[$id]);
+                            // Clean up tracking
+                            unset($activeRequests[$id]);
+                            unset($teamMap[$id]);
 
-                        $data = json_decode($response->getContent(), true);
+                            $statusCode = $response->getStatusCode();
+                            if ($statusCode !== 200) {
+                                throw new \RuntimeException("API responded with status code $statusCode");
+                            }
 
-                        if (!is_array($data)) {
-                            throw new \Exception('Invalid JSON response');
+                            $data = json_decode($response->getContent(), true);
+
+                            if (!is_array($data)) {
+                                throw new \RuntimeException("Invalid JSON response");
+                            }
+
+                            // Load full team entity
+                            $team = $this->teamRepository->find($teamId);
+                            if (!$team) {
+                                throw new \RuntimeException("Team not found in database");
+                            }
+
+                            // Process team stats data
+                            $result = $this->pandaScoreService->processTeamStats($team, $data);
+
+                            if ($result) {
+                                $io->text(sprintf('<info>✓</info> Stats updated for team %s', $team->getName()));
+                                $success++;
+                            } else {
+                                $io->text(sprintf('<comment>⚠</comment> Failed to update stats for team %s', $team->getName()));
+                                $failure++;
+                            }
+
+                            $processed++;
+
+                            // Clean up for memory savings
+                            $data = null;
+                            $team = null;
+                        } catch (\Exception $e) {
+                            $this->logger->error('Error processing team stats response', [
+                                'error' => $e->getMessage(),
+                                'trace' => $e->getTraceAsString(),
+                            ]);
+
+                            $io->error(sprintf('Error processing stats: %s', $e->getMessage()));
+
+                            $processed++;
+                            $failure++;
                         }
-
-                        $io->success('Stats fetched for team');
-                        $this->updateTeamData($team, $data, $io, $playersMap);
-                        $processed++;
-
-                        // Очищаем данные ответа
-                        $data = null;
-                        $response = null;
-                    } catch (\Exception $e) {
-                        $io->error(sprintf(
-                            'Error processing stats: %s',
-                            $e->getMessage()
-                        ));
                     }
                 }
-            }
-
-            // Периодически освобождаем память
-            if (count($activeRequests) === 0 && !empty($pendingRequests)) {
-                gc_collect_cycles();
-                usleep(100000); // 100 мс
+            } else if (empty($pendingRequests)) {
+                // No active requests and no pending requests - we're done
+                break;
+            } else {
+                // No active requests but pending requests remain - brief pause
+                usleep(50000); // 50ms
             }
         }
 
-        // Отсоединяем обработанные объекты
-        foreach ($teams as $teamData) {
-            $this->entityManager->detach($teamData['entity']);
-        }
-
-        // Очищаем ссылки на все объекты
-        $pendingRequests = null;
-        $activeRequests = null;
-        $teamMap = null;
-
-        return $processed;
+        return [
+            'total' => $processed,
+            'success' => $success,
+            'failure' => $failure
+        ];
     }
 
-    private function updateTeamData(Team $team, array $data, SymfonyStyle $io, array $playersMap): void
+    /**
+     * Process a single team
+     */
+    private function processTeam(Team $team, SymfonyStyle $io): bool
     {
-        try {
-            // Используем прямой SQL для обновления
-            $conn = $this->entityManager->getConnection();
-
-            // Обрабатываем last_games с дополнительными запросами для каждой игры
-            $enrichedGames = [];
-            $lastRequestTime = microtime(true);
-            $processedGameIds = [];
-
-            if (!empty($data['last_games'])) {
-                // Ограничиваем количество игр для обработки
-                $gamesToProcess = array_slice($data['last_games'], 0, 5);
-
-                foreach ($gamesToProcess as $game) {
-                    if (empty($game['id'])) {
-                        $enrichedGames[] = $game;
-                        continue;
-                    }
-
-                    $gameId = $game['id'];
-                    $processedGameIds[] = $gameId;
-
-                    // Проверяем, существует ли игра уже в базе
-                    $existingGame = $conn->fetchAssociative(
-                        'SELECT id, data FROM game WHERE pandascore_id = ?',
-                        [$gameId]
-                    );
-
-                    if ($existingGame) {
-                        // Если игра существует, используем ее данные
-                        $gameData = json_decode($existingGame['data'], true);
-                        $enrichedGames[] = $gameData;
-
-                        // Убеждаемся, что связь с командой существует
-                        $this->ensureTeamGameRelation($team->getId(), $existingGame['id'], $conn);
-
-                        continue;
-                    }
-
-                    // Соблюдаем ограничение RateLimit - 2 запроса в секунду
-                    $now = microtime(true);
-                    if ($now - $lastRequestTime < 0.5) { // 0.5 секунды = 2 запроса в секунду
-                        $sleepTime = 0.5 - ($now - $lastRequestTime);
-                        usleep((int)($sleepTime * 1_000_000));
-                    }
-
-                    try {
-                        $response = $this->httpClient->request('GET', "https://api.pandascore.co/csgo/games/{$gameId}", [
-                            'headers' => [
-                                'Authorization' => 'Bearer ' . $_ENV['PANDASCORE_TOKEN'],
-                                'Accept' => 'application/json',
-                            ],
-                            'timeout' => 10,
-                        ]);
-
-                        $gameData = json_decode($response->getContent(), true);
-                        if (is_array($gameData)) {
-                            // Объединяем базовую информацию с детальной
-                            $enrichedGame = array_merge($game, $gameData);
-                            $enrichedGames[] = $enrichedGame;
-
-                            // Сохраняем игру в базу данных
-                            $this->saveGameToDatabase($enrichedGame, $team->getId(), $conn);
-                            $io->text(sprintf('Fetched and saved game %s to database', $gameId));
-                        } else {
-                            // Если что-то пошло не так, сохраняем оригинальные данные
-                            $enrichedGames[] = $game;
-                        }
-
-                        $lastRequestTime = microtime(true);
-                    } catch (\Exception $e) {
-                        $io->warning(sprintf('Could not fetch game details for game %s: %s', $gameId, $e->getMessage()));
-                        // Сохраняем оригинальные данные при ошибке
-                        $enrichedGames[] = $game;
-                    }
-
-                    // Очищаем данные после каждой игры
-                    $gameData = null;
-                }
-            }
-
-            // Обновляем данные команды с обогащенными данными игр
-            $lastGames = !empty($enrichedGames) ? json_encode($enrichedGames) : null;
-            $stats = !empty($data['stats']) ? json_encode($data['stats']) : null;
-
-            $conn->executeStatement(
-                'UPDATE team SET last_games = :last_games, stats = :stats WHERE id = :id',
-                [
-                    'last_games' => $lastGames,
-                    'stats' => $stats,
-                    'id' => $team->getId()
-                ]
-            );
-
-            // Обрабатываем связи с игроками
-            if (!empty($data['players'])) {
-                foreach ($data['players'] as $playerData) {
-                    if (empty($playerData['id'])) {
-                        continue;
-                    }
-
-                    $playerId = (string)$playerData['id'];
-                    $player = $playersMap[$playerId] ?? null;
-
-                    if ($player) {
-                        // Проверяем, существует ли уже связь
-                        $checkSql = 'SELECT COUNT(*) FROM player_teams WHERE team_id = ? AND player_id = ?';
-                        $exists = (int)$conn->fetchOne($checkSql, [$team->getId(), $player]);
-
-                        if ($exists === 0) {
-                            // Добавляем связь
-                            $conn->executeStatement(
-                                'INSERT INTO player_teams (team_id, player_id) VALUES (?, ?)',
-                                [$team->getId(), $player]
-                            );
-                        }
-                    }
-                }
-            }
-
-            // Очищаем ссылки на данные
-            $data = null;
-            $lastGames = null;
-            $stats = null;
-            $enrichedGames = null;
-            $processedGameIds = null;
-        } catch (\Exception $e) {
-            $io->error('Error updating team data: ' . $e->getMessage());
+        if (empty($team->getPandascoreId())) {
+            $io->warning(sprintf('Team %s has no PandaScore ID, skipping', $team->getName()));
+            return false;
         }
-    }
-
-    private function saveGameToDatabase(array $gameData, int $teamId, $conn): void
-    {
-        try {
-            $gameId = $gameData['id'];
-            $gameName = $gameData['match']['name'];
-            $beginAt = $gameData['begin_at'] ?? null;
-            $endAt = $gameData['end_at'] ?? null;
-            $status = $gameData['status'] ?? 'unknown';
-            $matchData = $gameData['match'] ? json_encode($gameData['match']) : null;
-            $mapData = $gameData['map'] ? json_encode($gameData['map']) : null;
-            $winnerData = $gameData['winner'] ? json_encode($gameData['winner']) : null;
-            $roundsData = $gameData['rounds'] ? json_encode($gameData['rounds']) : null;
-            $roundsScoreData = $gameData['rounds_score'] ? json_encode($gameData['rounds_score']) : null;
-            $results = $gameData['match']['results'] ? json_encode($gameData['match']['results']) : null;
-
-            // Определяем турнир, если он есть в данных
-            $tournamentId = null;
-            if (!empty($gameData['match']) && !empty($gameData['match']['tournament']) && !empty($gameData['match']['tournament']['id'])) {
-                $tournamentPandaId = $gameData['match']['tournament']['id'];
-                $tournamentResult = $conn->fetchOne(
-                    'SELECT id FROM tournaments WHERE tournament_id = ?',
-                    [$tournamentPandaId]
-                );
-
-                if ($tournamentResult && is_numeric($tournamentResult)) {
-                    $tournamentId = (int)$tournamentResult;
-                }
-            }
-
-            // Проверяем, существует ли уже эта игра
-            $existingId = $conn->fetchOne(
-                'SELECT id FROM game WHERE pandascore_id = ?',
-                [$gameId]
-            );
-
-            if ($existingId) {
-                // Игра уже существует, обновляем данные
-                $updateSql = 'UPDATE game SET 
-                     name = ?, begin_at = ?, end_at = ?, status = ?, 
-                     "match" = ?, map = ?, winner = ?, rounds = ?, rounds_score = ?,
-                     tournament_id = ? , results = ?, data = ?
-                     WHERE id = ?';
-
-                $conn->executeStatement(
-                    $updateSql,
-                    [
-                        $gameName,
-                        $beginAt,
-                        $endAt,
-                        $status,
-                        $matchData,
-                        $mapData,
-                        $winnerData,
-                        $roundsData,
-                        $roundsScoreData,
-                        $tournamentId,
-                        $results,
-                        json_encode($gameData),
-                        $existingId
-                    ]
-                );
-
-                // Убеждаемся, что связь с командой существует
-                $this->ensureTeamGameRelation($teamId, $existingId, $conn);
-                if ($roundsScoreData) {
-                    $rd = json_decode($roundsScoreData, true);
-                    error_log('in existing checking for team ' . $teamId);
-                    error_log(json_encode($rd));
-                    $opponentTeamId = null;
-                    foreach ($rd as $teamScore) {
-                        if ($teamScore['team_id'] != $teamId) {
-                            $opponentTeamId = $teamScore['team_id'];
-                            break;
-                        }
-                    }
-                    if ($opponentTeamId) {
-                        $opponentId = $conn->fetchOne(
-                            'SELECT id FROM team WHERE pandascore_id = ?',
-                            [$opponentTeamId]
-                        );
-
-                        if ($opponentId) {
-                            error_log('inserting ' . $opponentId . ' as opponent id for existing game id:' . $existingId);
-                            $this->ensureTeamGameRelation((int)$opponentId, (int)$existingId, $conn);
-                        }
-                    }
-                }
-
-                return;
-            }
-
-            // Создаем новую запись в таблице game
-            $insertSql = 'INSERT INTO game (pandascore_id, name, "match", map, begin_at, end_at, winner, rounds, rounds_score, status, tournament_id, results, data, created_at) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())';
-
-            $conn->executeStatement(
-                $insertSql,
-                [
-                    $gameId,
-                    $gameName,
-                    $matchData,
-                    $mapData,
-                    $beginAt,
-                    $endAt,
-                    $winnerData,
-                    $roundsData,
-                    $roundsScoreData,
-                    $status,
-                    $tournamentId,
-                    $results,
-                    json_encode($gameData)
-                ]
-            );
-
-            // Получаем ID новой записи
-            $newGameId = $conn->lastInsertId();
-
-            // Создаем связь между командой и игрой
-            $this->ensureTeamGameRelation($teamId, (int)$newGameId, $conn);
-            error_log('inserting ' . $teamId . ' as team id for new game id: ' . $newGameId);
-            if ($roundsScoreData) {
-                $rd = json_decode($roundsScoreData, true);
-                $opponentTeamId = null;
-                foreach ($rd as $teamScore) {
-                    if ($teamScore['team_id'] != $teamId) {
-                        $opponentTeamId = $teamScore['team_id'];
-                        break;
-                    }
-                }
-                if ($opponentTeamId) {
-                    $opponentId = $conn->fetchOne(
-                        'SELECT id FROM team WHERE pandascore_id = ?',
-                        [$opponentTeamId]
-                    );
-
-                    if ($opponentId) {
-                        error_log('inserting ' . $opponentId . ' as opponent id for new game id: ' . $newGameId);
-                        $this->ensureTeamGameRelation((int)$opponentId, (int)$newGameId, $conn);
-                    }
-                }
-            }
-        } catch (\Exception $e) {
-            // При ошибке просто логируем, но не прерываем весь процесс
-            error_log('Error saving game: ' . $e->getMessage());
-        }
-    }
-
-    private function ensureTeamGameRelation(int $teamId, int $gameId, $conn): void
-    {
-        $startTime = microtime(true);
-        $timeout = 5; // 5 секунд максимум
 
         try {
-            // Проверяем, не длится ли операция слишком долго
-            if (microtime(true) - $startTime > $timeout) {
-                error_log("Timeout checking relation existence, skipping...");
-                return;
+            $url = sprintf(self::API_URL, $team->getPandascoreId());
+
+            $response = $this->httpClient->request('GET', $url, [
+                'headers' => [
+                    'Authorization' => 'Bearer ' . $this->pandascoreToken,
+                    'Accept' => 'application/json',
+                ],
+                'timeout' => 30,
+            ]);
+
+            $data = json_decode($response->getContent(), true);
+
+            if (!is_array($data)) {
+                throw new \RuntimeException("Invalid JSON response");
             }
 
-            // Проверка на существование связи без блокировки
-            try {
-                $conn->executeStatement('SET LOCAL statement_timeout = 5000'); // 5 секунд в миллисекундах
+            $result = $this->pandaScoreService->processTeamStats($team, $data);
 
-                // Используем INSERT ON CONFLICT DO NOTHING для PostgreSQL
-                $conn->executeStatement(
-                    'INSERT INTO team_game (team_id, game_id) VALUES (?, ?) ON CONFLICT (team_id, game_id) DO NOTHING',
-                    [$teamId, $gameId]
-                );
-            } catch (\Exception $e) {
-                // Если произошла ошибка, пробуем традиционный подход
-                $exists = (int)$conn->fetchOne(
-                    'SELECT COUNT(*) FROM team_game WHERE team_id = ? AND game_id = ?',
-                    [$teamId, $gameId]
-                );
-
-                // Проверяем таймаут перед вставкой
-                if (microtime(true) - $startTime > $timeout) {
-                    error_log("Timeout after checking relation, skipping insertion...");
-                    return;
-                }
-
-                if ($exists === 0) {
-                    $conn->executeStatement(
-                        'INSERT INTO team_game (team_id, game_id) VALUES (?, ?)',
-                        [$teamId, $gameId]
-                    );
-                }
+            if ($result) {
+                $io->text(sprintf('<info>✓</info> Stats updated for team %s', $team->getName()));
+                return true;
+            } else {
+                $io->text(sprintf('<comment>⚠</comment> Failed to update stats for team %s', $team->getName()));
+                return false;
             }
         } catch (\Exception $e) {
-            error_log("Error in ensureTeamGameRelation: " . $e->getMessage());
+            $this->logger->error('Error processing team stats', [
+                'team_id' => $team->getId(),
+                'team_name' => $team->getName(),
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            $io->error(sprintf('Error fetching stats for team %s: %s', $team->getName(), $e->getMessage()));
+            return false;
         }
     }
 
-    private function loadPlayersMap(): array
+    /**
+     * Get total number of teams in the database
+     */
+    private function getTotalTeams(): int
     {
-        // Используем прямой SQL для оптимизации
         $conn = $this->entityManager->getConnection();
-        $sql = 'SELECT id, pandascore_id FROM player';
-        $result = $conn->executeQuery($sql);
-
-        $playersMap = [];
-        while ($row = $result->fetchAssociative()) {
-            // Храним только ID игрока, а не полный объект
-            $playersMap[$row['pandascore_id']] = $row['id'];
-        }
-
-        return $playersMap;
+        return (int)$conn->fetchOne('SELECT COUNT(id) FROM team');
     }
 }

@@ -2,101 +2,110 @@
 
 namespace App\Controller\Site;
 
-use App\DTO\BannerDTO;
-use App\DTO\PlayerDTO;
-use App\DTO\TeamDTO;
-use App\DTO\TeamListDTO;
+use App\Repository\TeamRepository;
+use App\Request\TeamListRequest;
+use App\Response\BannerResponse;
+use App\Response\TeamListResponse;
+use App\Response\TeamResponse;
+use App\Response\TeamShortResponse;
 use App\Service\BannerService;
-use App\Service\TeamService;
+use App\Service\Cache\CacheService;
+use App\Value\PaginatedResult;
+use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
-use Symfony\Component\Routing\Annotation\Route;
-use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
-use Symfony\Component\Serializer\SerializerInterface;
+use Symfony\Component\HttpKernel\Attribute\MapQueryString;
+use Symfony\Component\Routing\Attribute\Route;
 
-#[Route('/teams')]
-class TeamsController extends AbstractController
+#[Route('/teams', name: 'app_teams_')]
+class TeamController extends AbstractController
 {
-    private TeamService $teamService;
-    private SerializerInterface $serializer;
-    private BannerService $bannerService;
-
-    public function __construct(TeamService $teamService, BannerService $bannerService, SerializerInterface $serializer)
-    {
-        $this->teamService = $teamService;
-        $this->serializer = $serializer;
-        $this->bannerService = $bannerService;
+    public function __construct(
+        private readonly TeamRepository $teamRepository,
+        private readonly BannerService $bannerService,
+        private readonly CacheService $cacheService,
+    ) {
     }
 
-    #[Route('/', methods: ['GET'])]
-    public function listTeams(Request $request): JsonResponse
-    {
-        $page = $request->query->getInt('page', 1);
-        $limit = $request->query->getInt('limit', 10);
+    /**
+     * List teams with pagination and filtering
+     */
+    #[Route('', name: 'list', methods: ['GET'])]
+    public function listTeams(
+        #[MapQueryString] TeamListRequest $request
+    ): JsonResponse {
+        // Cache result using specific keys for this query
+        $response = $this->cacheService->getTeamList(
+            $request->page,
+            $request->limit,
+            $request->name,
+            $request->locale,
+            function() use ($request) {
+                // Get teams with pagination
+                $paginationResult = $this->teamRepository->findPaginated(
+                    $request->page,
+                    $request->limit,
+                    $request->name,
+                    $request->locale
+                );
 
-        $name = $request->query->get('name');
-        $locales = $request->query->all('locale');
+                // Create paginated result value object
+                $paginatedResult = PaginatedResult::fromRepositoryResult(
+                    $paginationResult,
+                    $request->page,
+                    $request->limit
+                );
 
-        $result = $this->teamService->getAllTeams($page, $limit, $name, $locales);
-        $banner = $this->bannerService->getBannerByPage('team_list');
+                // Get banner for team list page
+                $banner = $this->bannerService->getBannerByPage('team_list');
 
-        $data = [
-            'data' => array_map(fn($team) => new TeamListDTO($team), (array)$result['data']),
-            'banner' => $banner ? new BannerDTO($banner):null,
-            'meta' => [
-                'total' => $result['total'],
-                'page' => $page,
-                'limit' => $limit,
-                'pages' => $result['pages']
-            ]
-        ];
+                // Create response DTO
+                return TeamListResponse::fromPaginatedResult($paginatedResult, $banner);
+            }
+        );
 
-        $response = new JsonResponse($data);
-
-        $response->setPublic();
-        $response->setMaxAge(600); // Кэш на 10 минут
-        $response->setSharedMaxAge(600);
-
-        $etag = md5(json_encode($data));
-        $response->setEtag($etag);
-
-        if ($response->isNotModified($request)) {
-            return $response;
-        }
-
-        return $response;
+        return $this->json($response);
     }
 
-    #[Route('/{slug}', methods: ['GET'])]
-    public function getTeam(string $slug, Request $request): JsonResponse
+    /**
+     * Get a team by slug
+     */
+    #[Route('/{slug}', name: 'show', methods: ['GET'])]
+    public function getTeam(string $slug): JsonResponse
     {
-        $team = $this->teamService->getTeamBySlug($slug);
-        if (!$team) {
-            return new JsonResponse(['error' => 'Team not found'], Response::HTTP_NOT_FOUND);
-        }
-        $banner = $this->bannerService->getBannerByPage('team_detail');
-        $team = new TeamDTO($team);
+        // Cache result using specific key for this team
+        $response = $this->cacheService->getTeamDetail($slug, function() use ($slug) {
+            // Get team by slug
+            $team = $this->teamRepository->findOneBySlug($slug);
 
-        $otherTeams = $this->teamService->getRandomTeams();
-        $data = [
-            'team' => $team,
-            'otherTeams' => array_map(fn($team) => new TeamListDTO($team), (array)$otherTeams),
-            'banner' => $banner ? new BannerDTO($banner):null
-        ];
+            if (!$team) {
+                throw $this->createNotFoundException('Team not found');
+            }
 
-        $response = new JsonResponse($data);
+            // Get banner for team detail page
+            $banner = $this->bannerService->getBannerByPage('team_detail');
 
-        $response->setPublic();
-        $response->setMaxAge(600);
+            // Get random teams for recommendation
+            $otherTeams = $this->teamRepository->findRandom(12);
 
-        $etag = md5(json_encode($data));
-        $response->setEtag($etag);
+            // Filter out the current team from recommendations
+            $otherTeams = array_filter(
+                $otherTeams,
+                fn($otherTeam) => $otherTeam->getId() !== $team->getId()
+            );
 
-        if ($response->isNotModified($request)) {
-            return $response;
-        }
+            // Create response data
+            return [
+                'team' => TeamResponse::fromEntity($team),
+                'banner' => $banner ? BannerResponse::fromEntity($banner) : null,
+                'otherTeams' => array_map(
+                    fn($otherTeam) => TeamShortResponse::fromEntity($otherTeam),
+                    array_values($otherTeams)
+                ),
+            ];
+        });
 
-        return $response;
+        return $this->json($response);
     }
 }

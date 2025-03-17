@@ -8,9 +8,12 @@ use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\Common\Collections\Collection;
 use Symfony\Component\Serializer\Attribute\Groups;
 use Symfony\Component\Serializer\Attribute\MaxDepth;
+use Symfony\Component\Validator\Constraints as Assert;
 
 #[ORM\Entity(repositoryClass: TeamRepository::class)]
-class Team
+#[ORM\Table(name: "team")]
+#[ORM\HasLifecycleCallbacks]
+class Team extends AbstractEntity
 {
     #[ORM\Id]
     #[ORM\GeneratedValue]
@@ -24,15 +27,17 @@ class Team
     private int $id;
 
     #[ORM\Column(type: "string", length: 36, unique: true)]
+    #[Assert\NotBlank]
     #[Groups([
         "team:list",
         "team:details",
         "player:details:team",
         "game:details:team"
     ])]
-    private string $pandascore_id;
+    private string $pandascoreId;
 
     #[ORM\Column(type: "string", length: 255)]
+    #[Assert\NotBlank]
     #[Groups([
         "team:list",
         "team:details",
@@ -42,6 +47,7 @@ class Team
     private string $name;
 
     #[ORM\Column(type: "string", length: 255, unique: true)]
+    #[Assert\NotBlank]
     #[Groups([
         "team:list",
         "team:details",
@@ -57,7 +63,7 @@ class Team
         "player:details:team",
         "game:details:team"
     ])]
-    private ?string $acronym;
+    private ?string $acronym = null;
 
     #[ORM\Column(type: "string", length: 255, nullable: true)]
     #[Groups([
@@ -66,7 +72,7 @@ class Team
         "player:details:team",
         "game:details:team"
     ])]
-    private ?string $image;
+    private ?string $image = null;
 
     #[ORM\Column(type: "text", nullable: true)]
     #[Groups([
@@ -76,6 +82,7 @@ class Team
     private ?string $bio = null;
 
     #[ORM\Column(type: "json", options: ["jsonb" => true])]
+    #[Assert\Type("array")]
     #[Groups([
         "team:details",
         "team:edit"
@@ -89,7 +96,7 @@ class Team
         "player:details:team",
         "game:details:team"
     ])]
-    private ?string $location;
+    private ?string $location = null;
 
     #[ORM\OneToMany(targetEntity: Player::class, mappedBy: "currentTeam")]
     #[Groups([
@@ -98,14 +105,14 @@ class Team
     #[MaxDepth(1)]
     private Collection $players;
 
-    #[ORM\ManyToMany(targetEntity: Tournament::class, mappedBy: 'teams', cascade: ['persist'], fetch: 'EAGER')]
+    #[ORM\ManyToMany(targetEntity: Tournament::class, mappedBy: 'teams', cascade: ['persist'])]
     private Collection $teamTournaments;
 
     #[ORM\Column(type: "json", nullable: true, options: ["jsonb" => true])]
-    private ?array $stats;
+    private ?array $stats = null;
 
     #[ORM\Column(type: "json", nullable: true, options: ["jsonb" => true])]
-    private ?array $lastGames;
+    private ?array $lastGames = null;
 
     #[ORM\ManyToMany(targetEntity: Game::class, mappedBy: 'teams')]
     #[Groups([
@@ -119,9 +126,9 @@ class Team
         $this->players = new ArrayCollection();
         $this->teamTournaments = new ArrayCollection();
         $this->games = new ArrayCollection();
+        $this->socials = [];
     }
 
-    // Getters and setters
     public function getId(): int
     {
         return $this->id;
@@ -129,12 +136,13 @@ class Team
 
     public function getPandascoreId(): string
     {
-        return $this->pandascore_id;
+        return $this->pandascoreId;
     }
 
-    public function setPandascoreId(string $pandascore_id): void
+    public function setPandascoreId(string $pandascoreId): self
     {
-        $this->pandascore_id = $pandascore_id;
+        $this->pandascoreId = $pandascoreId;
+        return $this;
     }
 
     public function getName(): string
@@ -164,9 +172,10 @@ class Team
         return $this->acronym;
     }
 
-    public function setAcronym(?string $acronym): void
+    public function setAcronym(?string $acronym): self
     {
         $this->acronym = $acronym;
+        return $this;
     }
 
     public function getImage(): ?string
@@ -268,9 +277,10 @@ class Team
         return $this->stats;
     }
 
-    public function setStats(?array $stats): void
+    public function setStats(?array $stats): self
     {
         $this->stats = $stats;
+        return $this;
     }
 
     public function getLastGames(): ?array
@@ -278,9 +288,10 @@ class Team
         return $this->lastGames;
     }
 
-    public function setLastGames(?array $lastGames): void
+    public function setLastGames(?array $lastGames): self
     {
         $this->lastGames = $lastGames;
+        return $this;
     }
 
     public function getGames(): Collection
@@ -308,5 +319,57 @@ class Team
         }
 
         return $this;
+    }
+
+    /**
+     * Get the best map for this team based on win percentage
+     *
+     * @Groups({"team:list", "team:details"})
+     */
+    public function getBestMap(): ?string
+    {
+        if (!$this->stats || empty($this->stats['maps'])) {
+            return null;
+        }
+
+        $maps = $this->stats['maps'];
+        $bestMap = null;
+        $bestPercentage = 0;
+
+        foreach ($maps as $map) {
+            if ($map['total_played'] > 0) {
+                $percent = ($map['wins'] / $map['total_played']) * 100;
+
+                if ($percent > $bestPercentage) {
+                    $bestPercentage = $percent;
+                    $bestMap = $map;
+                }
+            }
+        }
+
+        return $bestMap ? $bestMap['name'] : null;
+    }
+
+    /**
+     * Get the total prize pool won by this team
+     *
+     * @Groups({"team:details"})
+     */
+    public function getTotalPrizepool(): ?int
+    {
+        $prizepool = 0;
+
+        if ($this->teamTournaments->isEmpty()) {
+            return $prizepool;
+        }
+
+        foreach ($this->teamTournaments as $tournament) {
+            $tournamentPrizepool = $tournament->getPrizepool();
+            if ($tournamentPrizepool) {
+                $prizepool += (int)$tournamentPrizepool;
+            }
+        }
+
+        return $prizepool > 0 ? $prizepool : null;
     }
 }

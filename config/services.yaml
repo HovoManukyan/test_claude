@@ -4,19 +4,21 @@
 # Put parameters here that don't need to change on each machine where the app is deployed
 # https://symfony.com/doc/current/best_practices.html#use-parameters-for-application-configuration
 parameters:
-    pandascore.api_base_url: 'https://api.pandascore.co'
+    pandascore.api_base_url: '%env(PANDASCORE_BASE_URL)%'
     pandascore.token: '%env(PANDASCORE_TOKEN)%'
 
     # File storage paths
     upload_dir: '%kernel.project_dir%/public/cdn'
     team_images_dir: '%upload_dir%/teams'
     player_images_dir: '%upload_dir%/players'
+    banner_images_dir: '%upload_dir%/banners'
 
     # Cache configuration
     cache_ttl:
         teams: 600
         players: 600
         tournaments: 1800
+        banners: 3600
 
 services:
     # default configuration for services in *this* file
@@ -29,6 +31,7 @@ services:
             $uploadDir: '%upload_dir%'
             $teamImagesDir: '%team_images_dir%'
             $playerImagesDir: '%player_images_dir%'
+            $bannerImagesDir: '%banner_images_dir%'
 
     # makes classes in src/ available to be used as services
     # this creates a service per class whose id is the fully-qualified class name
@@ -39,19 +42,25 @@ services:
             - '../src/Entity/'
             - '../src/Kernel.php'
             - '../src/Request/'
+            - '../src/Response/'
             - '../src/DTO/'
-    App\Service\PandaScoreService:
-    App\Service\SkinService:
+
+    # Explicitly configure controllers to enable attributes
     App\Controller\:
         resource: '../src/Controller/'
-        tags: [ 'controller.service_arguments' ]
+        tags: ['controller.service_arguments']
 
+    # Cache service configuration
     App\Service\Cache\CacheKeyFactory:
         arguments:
             $environment: '%kernel.environment%'
             $debug: '%kernel.debug%'
+
     App\Service\Cache\CacheService:
         arguments:
             $cacheTtl: '%cache_ttl%'
-    # add more service definitions when explicit configuration is needed
-    # please note that last definitions always *replace* previous ones
+
+    # Serializer configuration
+    serializer.normalizer.get_set:
+        class: Symfony\Component\Serializer\Normalizer\GetSetMethodNormalizer
+        tags: [serializer.normalizer]

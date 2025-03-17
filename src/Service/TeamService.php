@@ -1,156 +1,133 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Service;
 
 use App\Entity\Team;
+use App\Repository\TeamRepository;
+use App\Value\PaginatedResult;
 use Doctrine\ORM\EntityManagerInterface;
-use Doctrine\ORM\Query\ResultSetMapping;
-use Symfony\Contracts\Cache\ItemInterface;
-use Symfony\Contracts\Cache\TagAwareCacheInterface;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\Validator\Validator\ValidatorInterface;
 use Symfony\Component\Validator\Constraints as Assert;
 
 class TeamService
 {
-    private EntityManagerInterface $entityManager;
-    private TagAwareCacheInterface $cache;
-    private ValidatorInterface $validator;
-
     public function __construct(
-        EntityManagerInterface $entityManager,
-        TagAwareCacheInterface $cache,
-        ValidatorInterface $validator
+        private readonly EntityManagerInterface $entityManager,
+        private readonly TeamRepository $teamRepository,
+        private readonly LoggerInterface $logger,
+        private readonly ValidatorInterface $validator,
     ) {
-        $this->entityManager = $entityManager;
-        $this->cache = $cache;
-        $this->validator = $validator;
     }
 
-    public function getAllTeams(int $page, int $limit, ?string $name, ?array $locales = []): array
+    /**
+     * Get teams with pagination and filters for admin
+     *
+     * @param int $page Page number
+     * @param int $limit Results per page
+     * @param string|null $location Filter by location
+     * @param string|null $name Filter by name
+     * @return PaginatedResult Teams with pagination metadata
+     */
+    public function getAllTeamsForAdmin(int $page, int $limit, ?string $location = null, ?string $name = null): PaginatedResult
     {
-        $cacheKey = sprintf('teams_page_%d_limit_%d_name_%s_locales_%s',
-            $page,
-            $limit,
-            $name ?? 'all',
-            implode(',', $locales)
-        );
+        // Convert location to array if provided
+        $locales = $location ? [$location] : null;
 
-        return $this->cache->get($cacheKey, function (ItemInterface $item) use ($page, $limit, $name, $locales) {
-            $item->expiresAfter(600); // Кэш на 10 минут
-            $item->tag('teams');
+        // Get paginated teams
+        $result = $this->teamRepository->findPaginated($page, $limit, $name, $locales);
 
-            $offset = ($page - 1) * $limit;
-
-            $qb = $this->entityManager->getRepository(Team::class)->createQueryBuilder('t');
-
-            if ($name) {
-                $qb->andWhere('LOWER(t.name) LIKE LOWER(:name)')
-                    ->setParameter('name', '%' . strtolower(trim($name)) . '%');
-            }
-
-            if (!empty($locales)) {
-                $qb->andWhere('t.location IN (:locales)')
-                    ->setParameter('locales', $locales);
-            }
-
-            $total = (clone $qb)
-                ->select('COUNT(t.id)')
-                ->getQuery()
-                ->getSingleScalarResult();
-
-            $teams = $qb
-                ->orderBy('t.id', 'ASC')
-                ->setFirstResult($offset)
-                ->setMaxResults($limit)
-                ->getQuery()
-                ->getResult();
-
-            return [
-                'total' => (int) $total,
-                'pages' => $limit > 0 ? (int) ceil($total / $limit) : 1,
-                'data' => $teams,
-            ];
-        });
+        // Return as value object
+        return PaginatedResult::fromRepositoryResult($result, $page, $limit);
     }
 
+    /**
+     * Get all teams with pagination and filters for public API
+     *
+     * @param int $page Page number
+     * @param int $limit Results per page
+     * @param string|null $name Filter by name
+     * @param array|null $locales Filter by locations
+     * @return PaginatedResult Teams with pagination metadata
+     */
+    public function getAllTeams(int $page, int $limit, ?string $name = null, ?array $locales = null): PaginatedResult
+    {
+        // Get paginated teams
+        $result = $this->teamRepository->findPaginated($page, $limit, $name, $locales);
+
+        // Return as value object
+        return PaginatedResult::fromRepositoryResult($result, $page, $limit);
+    }
+
+    /**
+     * Get a team by ID
+     *
+     * @param int $id Team ID
+     * @return Team|null Team entity or null if not found
+     */
     public function getTeamById(int $id): ?Team
     {
-        $cacheKey = 'team_' . $id;
-
-        return $this->cache->get($cacheKey, function (ItemInterface $item) use ($id) {
-            $item->expiresAfter(300); // Кэш на 5 минут
-            $item->tag('teams');
-
-            return $this->entityManager->getRepository(Team::class)->find($id);
-        });
+        return $this->teamRepository->find($id);
     }
 
+    /**
+     * Get a team by slug
+     *
+     * @param string $slug Team slug
+     * @return Team|null Team entity or null if not found
+     */
     public function getTeamBySlug(string $slug): ?Team
     {
-        $cacheKey = 'team_slug_' . $slug;
-
-        return $this->cache->get($cacheKey, function (ItemInterface $item) use ($slug) {
-            $item->expiresAfter(300); // Кэш на 5 минут
-            $item->tag('teams');
-
-            return $this->entityManager->getRepository(Team::class)->findOneBy(['slug' => $slug]);
-        });
+        return $this->teamRepository->findOneBySlug($slug);
     }
 
-    public function getTeamsBySlug(array $teamSlugs): array
+    /**
+     * Get teams by their slugs
+     *
+     * @param array $slugs Team slugs
+     * @return Team[] Team entities
+     */
+    public function getTeamsBySlug(array $slugs): array
     {
-        $cacheKey = 'teams_slugs_' . implode('_', $teamSlugs);
-
-        return $this->cache->get($cacheKey, function (ItemInterface $item) use ($teamSlugs) {
-            $item->expiresAfter(300); // Кэш на 5 минут
-            $item->tag('teams');
-
-            return $this->entityManager->getRepository(Team::class)->findBy(['slug' => $teamSlugs]);
-        });
+        return $this->teamRepository->findBySlug($slugs);
     }
 
-    public function getRandomTeams(?int $limit = 12): array
+    /**
+     * Get random teams
+     *
+     * @param int $limit Number of teams to return
+     * @return Team[] Team entities
+     */
+    public function getRandomTeams(int $limit = 12): array
     {
-        $cacheKey = 'random_teams_' . $limit;
-
-        return $this->cache->get($cacheKey, function (ItemInterface $item) use ($limit) {
-            $item->expiresAfter(300); // Кэш на 5 минут
-            $item->tag('teams');
-
-            $sql = 'SELECT * 
-                FROM team 
-                OFFSET floor(random() * (SELECT COUNT(*) FROM team)) 
-                LIMIT :limit;';
-            $stmt = $this->entityManager->getConnection()->prepare($sql);
-            $stmt->bindValue('limit', $limit);
-            $result = $stmt->executeQuery();
-            $teams = $result->fetchAllAssociative(); // Возвращаем массив данных
-            $where = [];
-            foreach ($teams as $team){
-                $where[] = $team['id'];
-            }
-            return $this->entityManager->getRepository(Team::class)
-                ->createQueryBuilder('t')
-                ->where('t.id IN (:ids)')
-                ->setParameter('ids', $where)
-                ->setMaxResults($limit)
-                ->getQuery()
-                ->getResult();
-        });
+        return $this->teamRepository->findRandom($limit);
     }
 
-
+    /**
+     * Update a team
+     *
+     * @param int $teamId Team ID
+     * @param string|null $bio Team biography
+     * @param array|null $socials Social media links
+     * @return Team|null Updated team or null if not found
+     * @throws \InvalidArgumentException|\Exception If social media links are invalid
+     */
     public function updateTeam(int $teamId, ?string $bio, ?array $socials): ?Team
     {
-        $team = $this->entityManager->getRepository(Team::class)->find($teamId);
+        $team = $this->teamRepository->find($teamId);
+
         if (!$team) {
             return null;
         }
 
+        // Update biography if provided
         if ($bio !== null) {
             $team->setBio($bio);
         }
 
+        // Update social media links if provided
         if ($socials !== null) {
             $errors = $this->validateSocials($socials);
 
@@ -161,19 +138,41 @@ class TeamService
             $team->setSocials($socials);
         }
 
-        $this->entityManager->flush();
+        // Save changes
+        try {
+            $this->entityManager->flush();
 
-        $this->cache->invalidateTags(['teams']);
+            return $team;
+        } catch (\Exception $e) {
+            $this->logger->error('Error updating team', [
+                'teamId' => $teamId,
+                'error' => $e->getMessage(),
+            ]);
 
-        return $team;
+            throw $e;
+        }
     }
 
+    /**
+     * Validate social media links
+     *
+     * @param array $socials Social media links
+     * @return array Validation errors
+     */
     private function validateSocials(array $socials): array
     {
         $constraint = new Assert\Collection([
-            'vk' => new Assert\Optional([new Assert\Url()]),
-            'tg' => new Assert\Optional([new Assert\Url()]),
-            'twitter' => new Assert\Optional([new Assert\Url()])
+            'fields' => [
+                'vk' => new Assert\Optional([new Assert\Url()]),
+                'tg' => new Assert\Optional([new Assert\Url()]),
+                'twitter' => new Assert\Optional([new Assert\Url()]),
+                'instagram' => new Assert\Optional([new Assert\Url()]),
+                'facebook' => new Assert\Optional([new Assert\Url()]),
+                'youtube' => new Assert\Optional([new Assert\Url()]),
+                'twitch' => new Assert\Optional([new Assert\Url()]),
+                'discord' => new Assert\Optional([new Assert\Url()]),
+            ],
+            'allowExtraFields' => true,
         ]);
 
         $violations = $this->validator->validate($socials, $constraint);

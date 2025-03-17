@@ -4,138 +4,241 @@ declare(strict_types=1);
 
 namespace App\Command;
 
-use App\Entity\Player;
-use App\Entity\Team;
-use DateTime;
-use DateTimeImmutable;
+use App\Service\PandaScoreService;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
-use Doctrine\ORM\EntityManagerInterface;
 
 #[AsCommand(
     name: 'app:fetch-players',
-    description: 'Fetch CS:GO players from PandaScore API',
+    description: 'Fetch CS:GO players from PandaScore API with parallel processing',
 )]
 class FetchPlayersCommand extends Command
 {
+    /**
+     * API endpoint for players
+     */
     private const API_URL = 'https://api.pandascore.co/csgo/players';
+
+    /**
+     * Default number of items per page
+     */
     private const PER_PAGE = 100;
-    private const CONCURRENT_REQUESTS = 2;
-    private const REQUEST_DELAY = 0.5;
+
+    /**
+     * Maximum concurrent requests
+     */
+    private const MAX_CONCURRENT_REQUESTS = 5;
+
+    /**
+     * API rate limit (requests per second)
+     */
+    private const RATE_LIMIT = 2;
+
+    /**
+     * Memory threshold in MB
+     */
+    private const MEMORY_THRESHOLD = 800;
 
     public function __construct(
-        private readonly HttpClientInterface    $httpClient,
-        private readonly EntityManagerInterface $entityManager
-    )
-    {
+        private readonly PandaScoreService $pandaScoreService,
+        private readonly HttpClientInterface $httpClient,
+        private readonly LoggerInterface $logger,
+        private readonly string $pandascoreToken,
+    ) {
         parent::__construct();
+    }
+
+    protected function configure(): void
+    {
+        $this
+            ->addOption('start-page', 'p', InputOption::VALUE_REQUIRED, 'Starting page number', 1)
+            ->addOption('per-page', 'l', InputOption::VALUE_REQUIRED, 'Results per page', self::PER_PAGE)
+            ->addOption('max-pages', 'm', InputOption::VALUE_REQUIRED, 'Maximum number of pages to fetch', 100)
+            ->addOption('concurrent', 'c', InputOption::VALUE_REQUIRED, 'Number of concurrent requests', self::MAX_CONCURRENT_REQUESTS);
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        ini_set('memory_limit', '512M');
-
         $io = new SymfonyStyle($input, $output);
-        $io->title('Fetching CS:GO players from PandaScore API');
+        $io->title('Fetching CS:GO players from PandaScore API with parallel processing');
 
-        $page = 1;
-        $hasMoreData = true;
+        // Set memory limit to handle parallel processing
+        ini_set('memory_limit', '1024M');
+
+        $startPage = (int)$input->getOption('start-page');
+        $perPage = (int)$input->getOption('per-page');
+        $maxPages = (int)$input->getOption('max-pages');
+        $maxConcurrent = (int)$input->getOption('concurrent');
+
+        $this->logger->info('Starting player fetch operation', [
+            'start_page' => $startPage,
+            'per_page' => $perPage,
+            'max_pages' => $maxPages,
+            'max_concurrent' => $maxConcurrent
+        ]);
+
+        $pendingPages = [];
+        for ($page = $startPage; $page < $startPage + $maxPages; $page++) {
+            $pendingPages[] = $page;
+        }
+
+        $activeRequests = [];
+        $pageToRequestMap = [];
+        $requestId = 0;
         $totalSavedPlayers = 0;
+        $processedPages = 0;
+        $emptyPagesCount = 0;
+        $lastRequestTime = microtime(true);
 
-        while ($hasMoreData) {
-            $requests = [];
-            for ($i = 0; $i < self::CONCURRENT_REQUESTS; $i++) {
-                $pageNum = $page + $i;
-                $url = sprintf('%s?page=%d&per_page=%d', self::API_URL, $pageNum, self::PER_PAGE);
-                $requests[$pageNum] = [
-                    'page' => $pageNum,
-                    'request' => $this->httpClient->request('GET', $url, [
-                        'headers' => [
-                            'Authorization' => 'Bearer ' . $_ENV['PANDASCORE_TOKEN'],
-                            'Accept' => 'application/json',
-                        ],
-                    ]),
-                ];
-            }
+        // Process requests in parallel
+        while (!empty($pendingPages) || !empty($activeRequests)) {
+            // Monitor memory usage and report
+            if ($processedPages > 0 && $processedPages % 5 === 0) {
+                $memoryUsage = memory_get_usage(true) / 1024 / 1024;
+                $io->note(sprintf('Memory usage: %.2f MB', $memoryUsage));
 
-            $emptyResponses = 0;
-
-            foreach ($requests as $requestData) {
-                try {
-                    $pageNum = $requestData['page'];
-                    $response = $requestData['request'];
-                    $data = json_decode($response->getContent(), true);
-
-                    if (!is_array($data)) {
-                        throw new \Exception('Invalid JSON response');
-                    }
-
-                    if (empty($data)) {
-                        $emptyResponses++;
-                        $io->warning(sprintf('Page %d is empty, stopping soon...', $pageNum));
-                        continue;
-                    }
-
-                    $io->success(sprintf('Page %d fetched, %d players found', $pageNum, count($data)));
-
-                    $players = [];
-
-                    foreach ($data as $playerData) {
-                        $playerId = (string)$playerData['id'];
-
-                        if (isset($players[$playerId])) {
-                            continue;
-                        }
-                        $player = new Player();
-                        $player->setPandascoreId($playerId);
-                        $player->setFirstName($playerData['first_name'] ?? null);
-                        $player->setLastName($playerData['last_name'] ?? null);
-                        $player->setName($playerData['name'] ?? 'Unknown');
-                        $player->setSlug($playerData['slug'] ?? null);
-                        $player->setNationality($playerData['nationality'] ?? null);
-                        if (!empty($playerData['image_url'])) {
-                            $player->setImage($playerData['image_url']);
-                        }
-                        $player->setBirthday(isset($playerData['birthday']) ? new DateTime($playerData['birthday']) : null);
-
-                        if (isset($playerData['current_team']['id'])) {
-                            $teamId = $playerData['current_team']['id'];
-                            $team = $this->entityManager->getRepository(Team::class)
-                                ->findOneBy(['pandascore_id' => $teamId]);
-                            if($team){
-                                $player->setCurrentTeam($team);
-                                $player->addTeam($team);
-                            }
-                        }
-                        $players[] = $player;
-                    }
-                    foreach ($players as $player) {
-                        $this->entityManager->persist($player);
-                    }
-                    $this->entityManager->flush();
-                    $this->entityManager->clear();
-                    $totalSavedPlayers += count($players);
-                    $io->info(sprintf('Saved %d players from page %d', count($players), $pageNum));
-
-                } catch (\Exception $e) {
-                    $io->error(sprintf('Error fetching page %d: %s', $pageNum, $e->getMessage()));
+                if ($memoryUsage > self::MEMORY_THRESHOLD) {
+                    $io->warning('High memory usage detected, forcing garbage collection');
+                    gc_collect_cycles();
+                    sleep(1); // Give system time to free memory
                 }
             }
 
-            if ($emptyResponses === self::CONCURRENT_REQUESTS) {
-                $io->warning('No more data found, stopping.');
-                $hasMoreData = false;
+            // Add new requests up to the concurrent limit
+            $now = microtime(true);
+            while (!empty($pendingPages) && count($activeRequests) < $maxConcurrent) {
+                // Respect rate limit
+                if ($now - $lastRequestTime < (1 / self::RATE_LIMIT)) {
+                    $sleepTime = (1 / self::RATE_LIMIT) - ($now - $lastRequestTime);
+                    usleep((int)($sleepTime * 1_000_000));
+                    $now = microtime(true);
+                }
+
+                $page = array_shift($pendingPages);
+                $currentRequestId = "request_" . $requestId++;
+
+                try {
+                    $url = sprintf('%s?page=%d&per_page=%d', self::API_URL, $page, $perPage);
+                    $io->text(sprintf('Sending request for page %d...', $page));
+
+                    $response = $this->httpClient->request('GET', $url, [
+                        'headers' => [
+                            'Authorization' => 'Bearer ' . $this->pandascoreToken,
+                            'Accept' => 'application/json',
+                        ],
+                        'user_data' => $currentRequestId,
+                    ]);
+
+                    $activeRequests[$currentRequestId] = $response;
+                    $pageToRequestMap[$currentRequestId] = $page;
+                    $lastRequestTime = microtime(true);
+                } catch (\Exception $e) {
+                    $this->logger->error('Error requesting players page', [
+                        'page' => $page,
+                        'error' => $e->getMessage(),
+                    ]);
+                    $io->error(sprintf('Error requesting page %d: %s', $page, $e->getMessage()));
+                }
             }
 
-            $page += self::CONCURRENT_REQUESTS;
-            usleep((int)(self::REQUEST_DELAY * 1_000_000));
+            // Check for completed requests
+            if (!empty($activeRequests)) {
+                foreach ($this->httpClient->stream($activeRequests) as $response => $chunk) {
+                    if ($chunk->isLast()) {
+                        try {
+                            // Get the request ID and page
+                            $id = $response->getInfo('user_data');
+                            $page = $pageToRequestMap[$id];
+
+                            // Remove from active tracking
+                            unset($activeRequests[$id]);
+                            unset($pageToRequestMap[$id]);
+
+                            $statusCode = $response->getStatusCode();
+                            if ($statusCode !== 200) {
+                                throw new \RuntimeException("API responded with status code $statusCode");
+                            }
+
+                            $data = json_decode($response->getContent(), true);
+
+                            if (!is_array($data)) {
+                                throw new \RuntimeException("Invalid JSON response");
+                            }
+
+                            if (empty($data)) {
+                                $io->warning(sprintf('Page %d is empty, no players found', $page));
+                                $this->logger->info('Empty players page', ['page' => $page]);
+                                $emptyPagesCount++;
+
+                                // If we've seen 3 consecutive empty pages, assume we're done
+                                if ($emptyPagesCount >= 3) {
+                                    $io->warning('Multiple empty pages found, stopping future requests');
+                                    $pendingPages = []; // Clear pending pages
+                                }
+                            } else {
+                                $emptyPagesCount = 0; // Reset empty pages counter
+                                $savedCount = 0;
+
+                                // Process each player through PandaScoreService
+                                foreach ($data as $playerData) {
+                                    if ($this->pandaScoreService->processPlayerData($playerData)) {
+                                        $savedCount++;
+                                    }
+                                }
+
+                                // Flush changes after processing all players on the page
+                                $this->pandaScoreService->flushChanges();
+
+                                $totalSavedPlayers += $savedCount;
+                                $io->success(sprintf('Processed page %d: Saved %d players', $page, $savedCount));
+                                $this->logger->info('Saved players from page', [
+                                    'page' => $page,
+                                    'count' => $savedCount,
+                                    'total_so_far' => $totalSavedPlayers
+                                ]);
+                            }
+
+                            $processedPages++;
+                        } catch (\Exception $e) {
+                            $io->error(sprintf('Error processing page response: %s', $e->getMessage()));
+                            $this->logger->error('Error processing player data', [
+                                'error' => $e->getMessage(),
+                                'trace' => $e->getTraceAsString(),
+                            ]);
+                        }
+                    }
+                }
+            } else if (empty($pendingPages)) {
+                // No active requests and no pending pages - we're done
+                break;
+            } else {
+                // No active requests but pending pages remain - small pause
+                usleep(50000); // 50ms
+            }
+
+            // Force garbage collection periodically
+            if ($processedPages % 10 === 0) {
+                gc_collect_cycles();
+            }
         }
 
-        $io->success(sprintf('Fetching complete. Total players saved: %d', $totalSavedPlayers));
+        $io->success(sprintf(
+            'Fetching complete. Processed %d pages, saved %d players.',
+            $processedPages,
+            $totalSavedPlayers
+        ));
+
+        $this->logger->info('Player fetch operation completed successfully', [
+            'total_players_saved' => $totalSavedPlayers,
+            'pages_processed' => $processedPages
+        ]);
+
         return Command::SUCCESS;
     }
 }
