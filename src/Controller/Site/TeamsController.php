@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Controller\Site;
 
 use App\Repository\TeamRepository;
@@ -10,6 +12,7 @@ use App\Response\TeamResponse;
 use App\Response\TeamShortResponse;
 use App\Service\BannerService;
 use App\Service\Cache\CacheService;
+use App\Service\HttpCacheService;
 use App\Value\PaginatedResult;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -19,12 +22,13 @@ use Symfony\Component\HttpKernel\Attribute\MapQueryString;
 use Symfony\Component\Routing\Attribute\Route;
 
 #[Route('/teams', name: 'app_teams_')]
-class TeamController extends AbstractController
+class TeamsController extends AbstractController
 {
     public function __construct(
         private readonly TeamRepository $teamRepository,
         private readonly BannerService $bannerService,
         private readonly CacheService $cacheService,
+        private readonly HttpCacheService $httpCacheService,
     ) {
     }
 
@@ -65,17 +69,24 @@ class TeamController extends AbstractController
             }
         );
 
-        return $this->json($response);
+        // Create response
+        $jsonResponse = $this->json($response);
+
+        // Add cache headers
+        $etag = $this->httpCacheService->generateEtag($response);
+        $this->httpCacheService->addTeamCacheHeaders($jsonResponse, $etag);
+
+        return $jsonResponse;
     }
 
     /**
      * Get a team by slug
      */
     #[Route('/{slug}', name: 'show', methods: ['GET'])]
-    public function getTeam(string $slug): JsonResponse
+    public function getTeam(string $slug, Request $request): JsonResponse
     {
         // Cache result using specific key for this team
-        $response = $this->cacheService->getTeamDetail($slug, function() use ($slug) {
+        $data = $this->cacheService->getTeamDetail($slug, function() use ($slug) {
             // Get team by slug
             $team = $this->teamRepository->findOneBySlug($slug);
 
@@ -106,6 +117,18 @@ class TeamController extends AbstractController
             ];
         });
 
-        return $this->json($response);
+        // Create response
+        $response = new JsonResponse($data);
+
+        // Add cache headers
+        $etag = $this->httpCacheService->generateEtag($data);
+        $this->httpCacheService->addTeamCacheHeaders($response, $etag);
+
+        // Check if response is modified
+        if ($response->isNotModified($request)) {
+            return $response;
+        }
+
+        return $response;
     }
 }

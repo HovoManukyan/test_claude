@@ -23,15 +23,14 @@ doctrine:
                 dir: '%kernel.project_dir%/src/Entity'
                 prefix: 'App\Entity'
                 alias: App
-        controller_resolver:
-            auto_mapping: false
-        # Enable query caching for frequently accessed entities
+
+        # Enable query and metadata caching
         metadata_cache_driver:
             type: pool
-            pool: doctrine.system_cache_pool
+            pool: doctrine.metadata_cache_pool
         query_cache_driver:
             type: pool
-            pool: doctrine.system_cache_pool
+            pool: doctrine.query_cache_pool
         result_cache_driver:
             type: pool
             pool: doctrine.result_cache_pool
@@ -49,7 +48,7 @@ when@prod:
             proxy_dir: '%kernel.build_dir%/doctrine/orm/Proxies'
             query_cache_driver:
                 type: pool
-                pool: doctrine.system_cache_pool
+                pool: doctrine.query_cache_pool
             result_cache_driver:
                 type: pool
                 pool: doctrine.result_cache_pool

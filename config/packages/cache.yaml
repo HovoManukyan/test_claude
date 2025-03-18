@@ -1,12 +1,37 @@
 framework:
     cache:
         # Configure the application cache
-        app: cache.adapter.redis
+        app: '%env(CACHE_ADAPTER)%'
         default_redis_provider: '%env(REDIS_URL)%'
 
         # Unique name of your app: used to compute stable namespaces for cache keys.
         prefix_seed: 'csgo_stats_app'
 
+        # Cache pools configuration
+        pools:
+            # Doctrine result cache pool
+            doctrine.result_cache_pool:
+                adapter: cache.app
+                default_lifetime: '%env(int:DOCTRINE_RESULT_CACHE_LIFETIME)%'
+                tags: true
+
+            # Doctrine metadata cache pool
+            doctrine.metadata_cache_pool:
+                adapter: cache.system
+                default_lifetime: '%env(int:DOCTRINE_METADATA_CACHE_LIFETIME)%'
+
+            # Doctrine query cache pool
+            doctrine.query_cache_pool:
+                adapter: cache.system
+                default_lifetime: '%env(int:DOCTRINE_QUERY_CACHE_LIFETIME)%'
+
+            # API response cache pool
+            api_response.cache_pool:
+                adapter: cache.app
+                default_lifetime: 600
+                tags: true
+
+# Environment-specific configurations
 when@test:
     framework:
         cache:
@@ -16,14 +41,19 @@ when@dev:
     framework:
         cache:
             app: cache.adapter.filesystem
+            # Use shorter TTLs in dev for easier testing
+            pools:
+                doctrine.result_cache_pool:
+                    default_lifetime: 60
+                doctrine.metadata_cache_pool:
+                    default_lifetime: 300
+                doctrine.query_cache_pool:
+                    default_lifetime: 60
+                api_response.cache_pool:
+                    default_lifetime: 30
 
 when@prod:
     framework:
         cache:
             app: cache.adapter.redis
             default_redis_provider: '%env(REDIS_URL)%'
-            pools:
-                doctrine.result_cache_pool:
-                    adapter: cache.app
-                doctrine.system_cache_pool:
-                    adapter: cache.system

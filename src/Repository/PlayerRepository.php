@@ -5,7 +5,9 @@ namespace App\Repository;
 use App\Entity\Player;
 use Doctrine\ORM\Query\Expr\Join;
 use Doctrine\Persistence\ManagerRegistry;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\String\Slugger\SluggerInterface;
+use Psr\Log\LoggerInterface;
 
 /**
  * @method Player|null find($id, $lockMode = null, $lockVersion = null)
@@ -15,12 +17,29 @@ use Symfony\Component\String\Slugger\SluggerInterface;
  */
 class PlayerRepository extends BaseRepository
 {
-    private SluggerInterface $slugger;
+    use DoctrineResultCache;
 
-    public function __construct(ManagerRegistry $registry, SluggerInterface $slugger)
-    {
+    /**
+     * @var bool Is debug mode enabled
+     */
+    private bool $debugMode;
+
+    /**
+     * @var LoggerInterface Logger for cache operations
+     */
+    private LoggerInterface $logger;
+
+    public function __construct(
+        ManagerRegistry $registry,
+        SluggerInterface $slugger,
+        LoggerInterface $logger,
+        #[Autowire('%kernel.debug%')]
+        bool $debugMode
+    ) {
         parent::__construct($registry, Player::class);
         $this->slugger = $slugger;
+        $this->logger = $logger;
+        $this->debugMode = $debugMode;
     }
 
     /**
@@ -70,53 +89,40 @@ class PlayerRepository extends BaseRepository
         // Add default ordering
         $qb->orderBy('p.name', 'ASC');
 
-        // Use base paginator
-        return $this->paginate($qb, $page, $limit);
-    }
+        // Create cache key for this query
+        $cacheParams = [
+            'hasCrosshair' => $hasCrosshair,
+            'teamSlugs' => $teamSlugs,
+            'name' => $name,
+        ];
+        $cacheKey = $this->createQueryCacheKey('player_list', $cacheParams);
 
-    /**
-     * Find players with pagination and filters for admin
-     *
-     * @param int $page Page number
-     * @param int $limit Results per page
-     * @param array $filters Additional filters
-     * @return array Result with data, total and pages
-     */
-    public function findPaginatedForAdmin(int $page, int $limit, array $filters = []): array
-    {
-        $qb = $this->createQueryBuilder('p')
-            ->leftJoin('p.currentTeam', 'ct')
-            ->leftJoin('p.skins', 's');
+        // Clone query builder to count total results
+        $countQb = clone $qb;
+        $countQb->select('COUNT(DISTINCT p.id)');
+        $countQb->resetDQLPart('orderBy');
 
-        // Apply name filter
-        if (!empty($filters['name'])) {
-            $qb->andWhere('LOWER(p.name) LIKE LOWER(:name)')
-                ->setParameter('name', '%' . strtolower(trim($filters['name'])) . '%');
-        }
+        // Execute count query with cache
+        $totalQuery = $this->createCachableQuery($countQb, $cacheKey . '_count', 600);
+        $total = (int)$totalQuery->getSingleScalarResult();
 
-        // Apply team filter
-        if (!empty($filters['team'])) {
-            $qb->join('p.teams', 't')
-                ->andWhere('LOWER(t.name) LIKE LOWER(:team)')
-                ->setParameter('team', '%' . strtolower(trim($filters['team'])) . '%');
-        }
+        // Calculate pages
+        $pages = $limit > 0 ? ceil($total / $limit) : 1;
 
-        // Apply country filter
-        if (!empty($filters['country'])) {
-            $qb->andWhere('p.nationality = :country')
-                ->setParameter('country', $filters['country']);
-        }
+        // Apply pagination to the original query
+        $firstResult = ($page - 1) * $limit;
+        $qb->setFirstResult($firstResult)
+            ->setMaxResults($limit);
 
-        // Apply crosshair filter
-        if (isset($filters['hasCrosshair'])) {
-            $qb->andWhere($filters['hasCrosshair'] ? 'p.crosshair IS NOT NULL' : 'p.crosshair IS NULL');
-        }
+        // Execute main query with cache
+        $query = $this->createCachableQuery($qb, $cacheKey . '_' . $page, 600);
+        $results = $query->getResult();
 
-        // Add default ordering
-        $qb->orderBy('p.name', 'ASC');
-
-        // Use base paginator
-        return $this->paginate($qb, $page, $limit);
+        return [
+            'data' => $results,
+            'total' => $total,
+            'pages' => $pages,
+        ];
     }
 
     /**
@@ -127,16 +133,22 @@ class PlayerRepository extends BaseRepository
      */
     public function findOneBySlugWithRelations(string $slug): ?Player
     {
-        return $this->createQueryBuilder('p')
+        $qb = $this->createQueryBuilder('p')
             ->leftJoin('p.currentTeam', 'ct')
             ->leftJoin('p.teams', 't')
             ->leftJoin('p.skins', 's')
             ->leftJoin('p.games', 'g')
             ->leftJoin('p.playerTournaments', 'pt')
             ->where('p.slug = :slug')
-            ->setParameter('slug', $slug)
-            ->getQuery()
-            ->getOneOrNullResult();
+            ->setParameter('slug', $slug);
+
+        // Create a cache key for this specific player
+        $cacheKey = 'player_by_slug_' . $slug;
+
+        // Create query with result cache
+        $query = $this->createCachableQuery($qb, $cacheKey, 1800);
+
+        return $query->getOneOrNullResult();
     }
 
     /**
@@ -147,12 +159,18 @@ class PlayerRepository extends BaseRepository
      */
     public function findByTeam(int $teamId): array
     {
-        return $this->createQueryBuilder('p')
+        $qb = $this->createQueryBuilder('p')
             ->where('p.currentTeam = :teamId')
             ->setParameter('teamId', $teamId)
-            ->orderBy('p.name', 'ASC')
-            ->getQuery()
-            ->getResult();
+            ->orderBy('p.name', 'ASC');
+
+        // Create cache key for this query
+        $cacheKey = 'players_by_team_' . $teamId;
+
+        // Create query with result cache
+        $query = $this->createCachableQuery($qb, $cacheKey, 1800);
+
+        return $query->getResult();
     }
 
     /**
@@ -164,6 +182,7 @@ class PlayerRepository extends BaseRepository
      */
     public function generateUniqueSlug(string $name, ?int $excludeId = null): string
     {
+        // Get filename without extension
         $slug = $this->slugger->slug(strtolower($name))->toString();
 
         $qb = $this->createQueryBuilder('p')
@@ -206,27 +225,57 @@ class PlayerRepository extends BaseRepository
      */
     public function countAll(): int
     {
-        return (int)$this->createQueryBuilder('p')
-            ->select('COUNT(p.id)')
-            ->getQuery()
-            ->getSingleScalarResult();
+        $qb = $this->createQueryBuilder('p')
+            ->select('COUNT(p.id)');
+
+        // Use cache for this common operation
+        $query = $this->createCachableQuery($qb, 'player_count_all', 3600);
+
+        return (int)$query->getSingleScalarResult();
     }
 
     /**
-     * Find players for stats fetching with optimized loading
+     * Find players with the most tournament wins
      *
-     * @param int $limit Maximum number of players to fetch
-     * @param int $offset Offset to start from
-     * @return Player[] Array of players
+     * @param int $limit Maximum number of players to return
+     * @return array Player entities
      */
-    public function findForStatsFetch(int $limit, int $offset): array
+    public function findTopPlayers(int $limit = 10): array
     {
-        return $this->createQueryBuilder('p')
-            ->select('p')
+        $qb = $this->createQueryBuilder('p')
+            ->leftJoin('p.currentTeam', 'ct')
+            ->where('p.stats IS NOT NULL')
+            ->orderBy('p.totalWon', 'DESC')
+            ->setMaxResults($limit);
+
+        // Create cache key
+        $cacheKey = 'players_top_' . $limit;
+
+        // Create query with result cache
+        $query = $this->createCachableQuery($qb, $cacheKey, 3600);
+
+        return $query->getResult();
+    }
+
+    /**
+     * Find players with crosshair settings
+     *
+     * @param int $limit Maximum number of players to return
+     * @return array Player entities
+     */
+    public function findWithCrosshair(int $limit = 20): array
+    {
+        $qb = $this->createQueryBuilder('p')
+            ->where('p.crosshair IS NOT NULL')
             ->orderBy('p.id', 'ASC')
-            ->setMaxResults($limit)
-            ->setFirstResult($offset)
-            ->getQuery()
-            ->getResult();
+            ->setMaxResults($limit);
+
+        // Create cache key
+        $cacheKey = 'players_with_crosshair_' . $limit;
+
+        // Create query with result cache
+        $query = $this->createCachableQuery($qb, $cacheKey, 3600);
+
+        return $query->getResult();
     }
 }
