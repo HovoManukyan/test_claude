@@ -41,6 +41,9 @@ services:
             $playerImagesDir: '%player_images_dir%'
             $bannerImagesDir: '%banner_images_dir%'
             $commandSettings: '%command%'
+            $cacheTtl: '%cache_ttl%'
+            $environment: '%kernel.environment%'
+            $debug: '%kernel.debug%'
 
     # makes classes in src/ available to be used as services
     # this creates a service per class whose id is the fully-qualified class name
@@ -59,16 +62,6 @@ services:
     App\Controller\:
         resource: '../src/Controller/'
         tags: ['controller.service_arguments']
-
-    # Cache service configuration
-    App\Service\Cache\CacheKeyFactory:
-        arguments:
-            $environment: '%kernel.environment%'
-            $debug: '%kernel.debug%'
-
-    App\Service\Cache\CacheService:
-        arguments:
-            $cacheTtl: '%cache_ttl%'
 
     # Serializer configuration - add GetSetMethodNormalizer
     serializer.normalizer.get_set:
