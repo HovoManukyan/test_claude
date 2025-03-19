@@ -1,35 +1,33 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Controller\Site;
 
-use App\DTO\BannerDTO;
-use App\DTO\PlayerDTO;
-use App\DTO\PlayerListDTO;
-use App\DTO\TeamSelectedFilterDTO;
 use App\Repository\PlayerRepository;
+use App\Request\Player\PlayerDetailRequest;
+use App\Request\Player\PlayerListRequest;
+use App\Response\Player\PlayerDetailResponse;
+use App\Response\Player\PlayerListResponse;
 use App\Service\BannerService;
-use App\Service\Cache\CacheService;
-use App\Service\HttpCacheService;
+use App\Service\Cache\CacheKeyFactory;
 use App\Service\TeamService;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
-use Symfony\Component\HttpFoundation\Request;
-use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Attribute\MapQueryString;
 use Symfony\Component\Routing\Attribute\Route;
-use Symfony\Component\Serializer\SerializerInterface;
-use App\Request\PlayerListRequest;
+use Symfony\Contracts\Cache\ItemInterface;
+use Symfony\Contracts\Cache\TagAwareCacheInterface;
 
 #[Route('/players')]
-class PlayersController extends AbstractController
+final class PlayersController extends AbstractController
 {
     public function __construct(
         private readonly PlayerRepository $playerRepository,
         private readonly BannerService $bannerService,
         private readonly TeamService $teamService,
-        private readonly SerializerInterface $serializer,
-        private readonly CacheService $cacheService,
-        private readonly HttpCacheService $httpCacheService
+        private readonly TagAwareCacheInterface $cache,
+        private readonly CacheKeyFactory $cacheKeyFactory,
     ) {
     }
 
@@ -37,96 +35,73 @@ class PlayersController extends AbstractController
     public function listPlayers(
         #[MapQueryString] PlayerListRequest $request
     ): JsonResponse {
-        // Use cacheService to get or compute the response
-        $data = $this->cacheService->getPlayerList(
+        $cacheKey = $this->cacheKeyFactory->playerList(
             $request->page,
             $request->limit,
             $request->hasCrosshair,
             $request->teamSlugs,
-            $request->name,
-            function() use ($request) {
-                // Get paginated players with filters
-                $result = $this->playerRepository->findPaginated(
-                    $request->page,
-                    $request->limit,
-                    $request->hasCrosshair,
-                    $request->teamSlugs,
-                    $request->name
-                );
-
-                // Get banner for the player list page
-                $banner = $this->bannerService->getBannerByPage('player_list');
-
-                // Get filtered teams data if team slugs provided
-                $teams = null;
-                if (!empty($request->teamSlugs)) {
-                    $teams = $this->teamService->getTeamsBySlug($request->teamSlugs);
-                }
-
-                // Transform to DTOs
-                return [
-                    'data' => array_map(fn($player) => new PlayerListDTO($player), $result['data']),
-                    'banner' => $banner ? new BannerDTO($banner) : null,
-                    'meta' => [
-                        'total' => $result['total'],
-                        'page' => $request->page,
-                        'limit' => $request->limit,
-                        'pages' => $result['pages']
-                    ],
-                    'selected_filter' => $teams ? array_map(
-                        fn($team) => new TeamSelectedFilterDTO($team),
-                        $teams
-                    ) : null
-                ];
-            }
+            $request->name
         );
 
-        // Create response
-        $response = new JsonResponse($data);
+        $data = $this->cache->get($cacheKey, function (ItemInterface $item) use ($request) {
+            $item->expiresAfter(600);
+            $item->tag(['players', 'player_list']);
 
-        // Add cache headers
-        $etag = $this->httpCacheService->generateEtag($data);
-        $this->httpCacheService->addPlayerCacheHeaders($response, $etag);
+            // Получаем игроков с пагинацией и связями
+            $paginatedPlayers = $this->playerRepository->findPaginatedWithRelations(
+                $request->page,
+                $request->limit,
+                $request->hasCrosshair,
+                $request->teamSlugs,
+                $request->name
+            );
 
-        return $response;
+            // Получаем баннер для страницы списка игроков
+            $banner = $this->bannerService->getBannerForPage('player_list');
+
+            // Получаем команды для фильтрации, если указаны slugs
+            $teams = !empty($request->teamSlugs)
+                ? $this->teamService->getTeamsBySlug($request->teamSlugs)
+                : null;
+
+            // Создаем объект ответа
+            return PlayerListResponse::fromPaginator(
+                $paginatedPlayers,
+                $request->page,
+                $request->limit,
+                $banner,
+                $teams
+            );
+        });
+
+        return $this->json($data);
     }
 
     #[Route('/{slug}', methods: ['GET'])]
-    public function getPlayer(string $slug, Request $request): JsonResponse
-    {
-        // Use cacheService to get or compute the response
-        $data = $this->cacheService->getPlayerDetail($slug, function() use ($slug) {
-            $player = $this->playerRepository->findOneBySlugWithRelations($slug);
+    public function getPlayer(
+        string $slug,
+        #[MapQueryString] PlayerDetailRequest $request
+    ): JsonResponse {
+        $cacheKey = $this->cacheKeyFactory->playerDetail($slug);
+
+        $data = $this->cache->get($cacheKey, function (ItemInterface $item) use ($slug) {
+            $item->expiresAfter(600);
+            $item->tag(['players', 'player_' . $slug]);
+
+            // Получаем игрока со всеми связями
+            $player = $this->playerRepository->findBySlugWithRelations($slug);
 
             if (!$player) {
                 throw $this->createNotFoundException('Player not found');
             }
 
-            // Get banner for player detail page
-            $banner = $this->bannerService->getBannerByPage('player_detail');
+            // Получаем баннер для страницы детальной информации
+            $banner = $this->bannerService->getBannerForPage('player_detail');
 
-            return [
-                'player' => new PlayerDTO($player),
-                'banner' => $banner ? new BannerDTO($banner) : null
-            ];
+            // Создаем объект ответа
+            return PlayerDetailResponse::fromEntities($player, $banner);
         });
 
-        // Handle case where player was not found in the callback
-        if (!isset($data['player'])) {
-            throw $this->createNotFoundException('Player not found');
-        }
-
-        // Create response
-        $response = new JsonResponse($data);
-
-        // Add cache headers
-        $etag = $this->httpCacheService->generateEtag($data);
-        $this->httpCacheService->addPlayerCacheHeaders($response, $etag);
-
-        if ($response->isNotModified($request)) {
-            return $response;
-        }
-
-        return $response;
+        return $this->json($data);
     }
 }

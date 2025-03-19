@@ -3,12 +3,14 @@
 namespace App\Entity;
 
 use App\Repository\TeamRepository;
+use DateTimeImmutable;
 use Doctrine\ORM\Mapping as ORM;
 use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\Common\Collections\Collection;
 use Symfony\Component\Serializer\Attribute\Groups;
 use Symfony\Component\Serializer\Attribute\MaxDepth;
 use Symfony\Component\Validator\Constraints as Assert;
+use Symfony\Component\Serializer\Annotation\Ignore;
 
 #[ORM\Entity(repositoryClass: TeamRepository::class)]
 #[ORM\Table(name: "team")]
@@ -27,7 +29,6 @@ class Team extends AbstractEntity
     private int $id;
 
     #[ORM\Column(type: "string", length: 36, unique: true)]
-    #[Assert\NotBlank]
     #[Groups([
         "team:list",
         "team:details",
@@ -120,6 +121,12 @@ class Team extends AbstractEntity
     ])]
     #[MaxDepth(1)]
     private Collection $games;
+
+    #[ORM\Column(type: "datetime_immutable")]
+    protected DateTimeImmutable $createdAt;
+
+    #[ORM\Column(type: "datetime_immutable", nullable: true)]
+    protected ?DateTimeImmutable $updatedAt = null;
 
     public function __construct()
     {

@@ -1,72 +1,76 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Repository;
 
 use App\Entity\Team;
-use Doctrine\ORM\Query\Expr\Join;
+use Doctrine\ORM\Tools\Pagination\Paginator;
 use Doctrine\Persistence\ManagerRegistry;
 use Symfony\Component\String\Slugger\SluggerInterface;
 
 /**
- * @method Team|null find($id, $lockMode = null, $lockVersion = null)
- * @method Team|null findOneBy(array $criteria, array $orderBy = null)
- * @method Team[]    findAll()
- * @method Team[]    findBy(array $criteria, array $orderBy = null, $limit = null, $offset = null)
+ * @extends BaseRepository<Team>
  */
 class TeamRepository extends BaseRepository
 {
-    private SluggerInterface $slugger;
-
-    public function __construct(ManagerRegistry $registry, SluggerInterface $slugger)
-    {
+    public function __construct(
+        ManagerRegistry $registry,
+        private readonly SluggerInterface $slugger,
+    ) {
         parent::__construct($registry, Team::class);
-        $this->slugger = $slugger;
     }
 
     /**
-     * Find teams with pagination and filters
+     * Поиск команд с пагинацией и связями
      *
-     * @param int $page Page number
-     * @param int $limit Results per page
-     * @param string|null $name Filter by name
-     * @param array|null $locales Filter by locations
-     * @return array Result with data, total and pages
+     * @param int $page Номер страницы
+     * @param int $limit Элементов на странице
+     * @param string|null $name Фильтр по имени
+     * @param array|null $locales Фильтр по локациям
+     * @return Paginator<Team> Пагинатор с командами
      */
-    public function findPaginated(int $page, int $limit, ?string $name = null, ?array $locales = null): array
-    {
+    public function findPaginatedWithRelations(
+        int $page,
+        int $limit,
+        ?string $name = null,
+        ?array $locales = null
+    ): Paginator {
         $qb = $this->createQueryBuilder('t')
-            ->leftJoin('t.players', 'p');
+            // Предзагрузка основных связей
+            ->leftJoin('t.players', 'p')->addSelect('p');
 
-        // Apply filters
+        // Применяем фильтр по имени
         if ($name !== null && $name !== '') {
             $qb->andWhere('LOWER(t.name) LIKE LOWER(:name)')
                 ->setParameter('name', '%' . trim($name) . '%');
         }
 
+        // Применяем фильтр по локациям
         if (!empty($locales)) {
             $qb->andWhere('t.location IN (:locales)')
                 ->setParameter('locales', $locales);
         }
 
-        // Add order by
+        // Сортировка по умолчанию
         $qb->orderBy('t.name', 'ASC');
 
-        // Use base paginator
-        return $this->paginate($qb, $page, $limit);
+        // Создаем экземпляр Doctrine Paginator
+        return $this->createPaginator($qb, $page, $limit);
     }
 
     /**
-     * Find a team by slug
+     * Находит команду по slug с предзагрузкой связей
      *
-     * @param string $slug Team slug
-     * @return Team|null Team entity or null if not found
+     * @param string $slug Slug команды
+     * @return Team|null Команда или null
      */
-    public function findOneBySlug(string $slug): ?Team
+    public function findBySlugWithRelations(string $slug): ?Team
     {
         return $this->createQueryBuilder('t')
-            ->leftJoin('t.players', 'p')
-            ->leftJoin('t.games', 'g')
-            ->leftJoin('t.teamTournaments', 'tt')
+            ->leftJoin('t.players', 'p')->addSelect('p')
+            ->leftJoin('t.games', 'g')->addSelect('g')
+            ->leftJoin('t.teamTournaments', 'tt')->addSelect('tt')
             ->where('t.slug = :slug')
             ->setParameter('slug', $slug)
             ->getQuery()
@@ -74,10 +78,10 @@ class TeamRepository extends BaseRepository
     }
 
     /**
-     * Find teams by their slugs
+     * Находит команды по их slug
      *
-     * @param array $slugs Team slugs
-     * @return array Team entities
+     * @param array $slugs Slugs команд
+     * @return Team[] Найденные команды
      */
     public function findBySlug(array $slugs): array
     {
@@ -89,27 +93,11 @@ class TeamRepository extends BaseRepository
     }
 
     /**
-     * Get random teams
+     * Генерирует уникальный slug для команды
      *
-     * @param int $limit Number of teams to return
-     * @return array Team entities
-     */
-    public function findRandom(int $limit = 12): array
-    {
-        // Using the native SQL for Postgres random() function
-        return $this->createQueryBuilder('t')
-            ->orderBy('RANDOM()')
-            ->setMaxResults($limit)
-            ->getQuery()
-            ->getResult();
-    }
-
-    /**
-     * Generate a unique slug for a team
-     *
-     * @param string $name Team name
-     * @param int|null $excludeId Exclude team ID from uniqueness check
-     * @return string Unique slug
+     * @param string $name Название команды
+     * @param int|null $excludeId ID исключаемой команды
+     * @return string Уникальный slug
      */
     public function generateUniqueSlug(string $name, ?int $excludeId = null): string
     {
@@ -126,14 +114,14 @@ class TeamRepository extends BaseRepository
                 ->setParameter('excludeId', $excludeId);
         }
 
-        $existingSlugs = $qb->getQuery()->getScalarResult();
+        $existingSlugs = $qb->getQuery()->getResult();
 
-        // If slug is unique, return it
+        // Если slug уникален, возвращаем его
         if (empty($existingSlugs)) {
             return $slug;
         }
 
-        // Extract existing numbers
+        // Извлекаем существующие номера
         $numbers = [];
         foreach ($existingSlugs as $row) {
             $existingSlug = $row['slug'];
@@ -144,7 +132,7 @@ class TeamRepository extends BaseRepository
             }
         }
 
-        // Find the next available number
+        // Находим следующий доступный номер
         $nextNumber = empty($numbers) ? 1 : max($numbers) + 1;
 
         return $slug . '-' . $nextNumber;

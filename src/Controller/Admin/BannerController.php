@@ -2,24 +2,23 @@
 
 namespace App\Controller\Admin;
 
+use App\Entity\Banner;
+use App\Request\Banner\CreateBannerRequest;
+use App\Request\Banner\UpdateBannerRequest;
 use App\Service\BannerService;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
-use Symfony\Component\Routing\Annotation\Route;
-use Symfony\Component\Serializer\SerializerInterface;
+use Symfony\Component\HttpKernel\Attribute\MapRequestPayload;
+use Symfony\Component\Routing\Attribute\Route;
 
 #[Route('/banners')]
-class BannerController extends AbstractController
+final class BannerController extends AbstractController
 {
-    private BannerService $bannerService;
-    private SerializerInterface $serializer;
-
-    public function __construct(BannerService $bannerService, SerializerInterface $serializer)
-    {
-        $this->bannerService = $bannerService;
-        $this->serializer = $serializer;
+    public function __construct(
+        private readonly BannerService $bannerService
+    ) {
     }
 
     #[Route('/', methods: ['GET'])]
@@ -30,8 +29,8 @@ class BannerController extends AbstractController
 
         $result = $this->bannerService->getAllBanners($page, $limit);
 
-        return new JsonResponse([
-            'data' => $this->serializer->normalize($result['data'], null, ['groups' => 'banner:list']),
+        return $this->json([
+            'data' => $result['data'],
             'meta' => [
                 'total' => $result['total'],
                 'page' => $page,
@@ -45,100 +44,56 @@ class BannerController extends AbstractController
     public function getOne(int $id): JsonResponse
     {
         $banner = $this->bannerService->getBannerById($id);
+
         if (!$banner) {
-            return new JsonResponse(['error' => 'Banner not found'], Response::HTTP_BAD_REQUEST);
+            return $this->json(['error' => 'Banner not found'], Response::HTTP_NOT_FOUND);
         }
 
-        return new JsonResponse($this->serializer->normalize($banner, null, ['groups' => 'banner:details']));
+        return $this->json($banner);
     }
 
     #[Route('/create', methods: ['POST'])]
-    public function create(Request $request): JsonResponse
-    {
-        // Получаем данные из запроса
-        $title = $request->request->get('title');
-        $type = $request->request->get('type');
-        $buttonText = $request->request->get('buttonText');
-        $promoText = $request->request->get('promoText');
-        $buttonLink = $request->request->get('buttonLink');
-        $pages = $request->request->all('pages');
-        $image = $request->files->get('image');
-
+    public function create(
+        #[MapRequestPayload] CreateBannerRequest $request
+    ): JsonResponse {
         try {
-            $banner = $this->bannerService->createBanner(
-                $title,
-                $type,
-                $buttonText,
-                $promoText,
-                $buttonLink,
-                $pages,
-                $image
-            );
-
-            return new JsonResponse(
-                $this->serializer->normalize($banner, null, ['groups' => 'banner:details']),
-                Response::HTTP_CREATED
-            );
-        } catch (\InvalidArgumentException $e) {
-            return new JsonResponse(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
+            $banner = $this->bannerService->createBanner($request);
+            return $this->json($banner, Response::HTTP_CREATED);
         } catch (\Exception $e) {
-            return new JsonResponse(['error' => 'Failed to create banner: ' . $e->getMessage()], Response::HTTP_INTERNAL_SERVER_ERROR);
+            return $this->json(
+                ['error' => 'Failed to create banner: ' . $e->getMessage()],
+                Response::HTTP_INTERNAL_SERVER_ERROR
+            );
         }
     }
 
     #[Route('/update/{id}', methods: ['POST'])]
-    public function update(Request $request, int $id): JsonResponse
-    {
-        $banner = $this->bannerService->getBannerById($id);
-        if (!$banner) {
-            return new JsonResponse(['error' => 'Banner not found'], Response::HTTP_NOT_FOUND);
-        }
-
-        $title = $request->request->get('title', $banner->getTitle());
-        $type = $request->request->get('type', $banner->getType());
-        $buttonText = $request->request->get('buttonText', $banner->getButtonText());
-        $promoText = $request->request->get('promoText', $banner->getPromoText());
-        $buttonLink = $request->request->get('buttonLink', $banner->getButtonLink());
-        $pages = $request->request->all('pages') ?: $banner->getPages();
-        $image = $request->files->get('image');
-
+    public function update(
+        Banner $banner,
+        #[MapRequestPayload] UpdateBannerRequest $request
+    ): JsonResponse {
         try {
-            $updatedBanner = $this->bannerService->updateBanner(
-                $banner,
-                $title,
-                $type,
-                $buttonText,
-                $promoText,
-                $buttonLink,
-                $pages,
-                $image
-            );
-
-            return new JsonResponse(
-                $this->serializer->normalize($updatedBanner, null, ['groups' => 'banner:details']),
-                Response::HTTP_OK
-            );
-        } catch (\InvalidArgumentException $e) {
-            return new JsonResponse(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
+            $updatedBanner = $this->bannerService->updateBanner($banner, $request);
+            return $this->json($updatedBanner);
         } catch (\Exception $e) {
-            return new JsonResponse(['error' => 'Failed to update banner: ' . $e->getMessage()], Response::HTTP_INTERNAL_SERVER_ERROR);
+            return $this->json(
+                ['error' => 'Failed to update banner: ' . $e->getMessage()],
+                Response::HTTP_INTERNAL_SERVER_ERROR
+            );
         }
     }
 
     #[Route('/delete/{id}', methods: ['DELETE'])]
-    public function delete(int $id): JsonResponse
+    public function delete(Banner $banner): JsonResponse
     {
-        $banner = $this->bannerService->getBannerById($id);
-
-        if (!$banner) {
-            return new JsonResponse(['error' => 'Banner not found'], Response::HTTP_NOT_FOUND);
-        }
-
         try {
             $this->bannerService->deleteBanner($banner);
-            return new JsonResponse(['message' => 'Banner deleted successfully'], Response::HTTP_OK);
+            return $this->json(['message' => 'Banner deleted successfully']);
         } catch (\Exception $e) {
-            return new JsonResponse(['error' => 'Failed to delete banner: ' . $e->getMessage()], Response::HTTP_INTERNAL_SERVER_ERROR);
+            return $this->json(
+                ['error' => 'Failed to delete banner: ' . $e->getMessage()],
+                Response::HTTP_INTERNAL_SERVER_ERROR
+            );
         }
     }
 }

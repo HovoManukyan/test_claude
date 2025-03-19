@@ -6,298 +6,195 @@ namespace App\Service;
 
 use App\Entity\Banner;
 use App\Repository\BannerRepository;
-use App\Value\PaginatedResult;
+use App\Request\Banner\CreateBannerRequest;
+use App\Request\Banner\UpdateBannerRequest;
+use App\Service\Cache\CacheKeyFactory;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use Symfony\Component\HttpFoundation\File\Exception\FileException;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
-use Symfony\Component\Validator\Validator\ValidatorInterface;
-use Symfony\Component\Validator\Constraints as Assert;
 use Symfony\Contracts\Cache\ItemInterface;
 use Symfony\Contracts\Cache\TagAwareCacheInterface;
 
-class BannerService
+/**
+ * Сервис для управления баннерами
+ */
+final class BannerService
 {
-    /**
-     * @param EntityManagerInterface $entityManager Doctrine entity manager
-     * @param BannerRepository $bannerRepository Banner repository
-     * @param FileService $fileService File service
-     * @param ValidatorInterface $validator Validator
-     * @param TagAwareCacheInterface $cache Cache
-     * @param LoggerInterface $logger Logger
-     */
+    private const CACHE_TAG = 'banners';
+    private const CACHE_TTL = 3600; // 1 час
+
     public function __construct(
         private readonly EntityManagerInterface $entityManager,
-        private readonly BannerRepository       $bannerRepository,
-        private readonly FileService            $fileService,
-        private readonly ValidatorInterface     $validator,
+        private readonly BannerRepository $bannerRepository,
+        private readonly FileService $fileService,
         private readonly TagAwareCacheInterface $cache,
-        private readonly LoggerInterface        $logger,
-    )
-    {
+        private readonly CacheKeyFactory $cacheKeyFactory,
+        private readonly LoggerInterface $logger,
+        private readonly string $bannerImagesDir
+    ) {
     }
 
     /**
-     * Create a new banner
+     * Получает баннер для указанной страницы
      *
-     * @param string $title Banner title
-     * @param string $type Banner type (default or promo)
-     * @param string $buttonText Button text
-     * @param string|null $promoText Promotional text
-     * @param string $buttonLink Button link URL
-     * @param array $pages Pages where the banner appears
-     * @param UploadedFile|null $image Banner image
-     * @return Banner Created banner
-     * @throws \InvalidArgumentException If validation fails
+     * @param string $pageIdentifier Идентификатор страницы (player_list, team_detail, etc.)
+     * @return Banner|null Баннер или null если не найден
      */
-    public function createBanner(
-        string        $title,
-        string        $type,
-        string        $buttonText,
-        ?string       $promoText,
-        string        $buttonLink,
-        array         $pages,
-        ?UploadedFile $image = null
-    ): Banner
+    public function getBannerForPage(string $pageIdentifier): ?Banner
     {
-        // Validate banner data
-        $this->validateBannerData($title, $type, $buttonText, $promoText, $buttonLink, $pages, $image);
+        $cacheKey = $this->cacheKeyFactory->bannerByPage($pageIdentifier);
 
-        // Create new banner
-        $banner = new Banner();
-        $banner->setTitle($title);
-        $banner->setType($type);
-        $banner->setButtonText($buttonText);
-        $banner->setPromoText($promoText);
-        $banner->setButtonLink($buttonLink);
-        $banner->setPages($pages);
+        return $this->cache->get($cacheKey, function (ItemInterface $item) use ($pageIdentifier) {
+            $item->expiresAfter(self::CACHE_TTL);
+            $item->tag([self::CACHE_TAG]);
 
-        // Save to get an ID
-        $this->entityManager->persist($banner);
-        $this->entityManager->flush();
-
-        // Upload image if provided
-        if ($image) {
-            $imagePath = $this->fileService->uploadBannerImage($image, $banner->getId());
-            $banner->setImage($imagePath);
-            $this->entityManager->flush();
-        }
-
-        // Invalidate cache
-        $this->invalidateCache();
-
-        return $banner;
-    }
-
-    /**
-     * Update an existing banner
-     *
-     * @param Banner $banner Banner to update
-     * @param string $title New title
-     * @param string $type New type
-     * @param string $buttonText New button text
-     * @param string|null $promoText New promotional text
-     * @param string $buttonLink New button link URL
-     * @param array $pages New pages
-     * @param UploadedFile|null $image New image
-     * @return Banner Updated banner
-     * @throws \InvalidArgumentException If validation fails
-     */
-    public function updateBanner(
-        Banner        $banner,
-        string        $title,
-        string        $type,
-        string        $buttonText,
-        ?string       $promoText,
-        string        $buttonLink,
-        array         $pages,
-        ?UploadedFile $image = null
-    ): Banner
-    {
-        // Validate banner data
-        $this->validateBannerData($title, $type, $buttonText, $promoText, $buttonLink, $pages, $image);
-
-        // Update banner
-        $banner->setTitle($title);
-        $banner->setType($type);
-        $banner->setButtonText($buttonText);
-        $banner->setPromoText($promoText);
-        $banner->setButtonLink($buttonLink);
-        $banner->setPages($pages);
-
-        // Update image if provided
-        if ($image) {
-            // Delete old image if exists
-            if ($banner->getImage()) {
-                $this->fileService->deleteFile($banner->getImage());
+            try {
+                return $this->bannerRepository->findOneRandomByPage($pageIdentifier);
+            } catch (\Exception $e) {
+                $this->logger->error('Error finding banner for page', [
+                    'page' => $pageIdentifier,
+                    'error' => $e->getMessage()
+                ]);
+                return null;
             }
-
-            // Upload new image
-            $imagePath = $this->fileService->uploadBannerImage($image, $banner->getId());
-            $banner->setImage($imagePath);
-        }
-
-        // Save changes
-        $this->entityManager->flush();
-
-        // Invalidate cache
-        $this->invalidateCache();
-
-        return $banner;
-    }
-
-    /**
-     * Delete a banner
-     *
-     * @param Banner $banner Banner to delete
-     * @return void
-     */
-    public function deleteBanner(Banner $banner): void
-    {
-        // Delete image if exists
-        if ($banner->getImage()) {
-            $this->fileService->deleteFile($banner->getImage());
-        }
-
-        // Delete banner
-        $this->entityManager->remove($banner);
-        $this->entityManager->flush();
-
-        // Invalidate cache
-        $this->invalidateCache();
-    }
-
-    /**
-     * Get all banners with pagination
-     *
-     * @param int $page Page number
-     * @param int $limit Results per page
-     * @return PaginatedResult Banners with pagination metadata
-     */
-    public function getAllBanners(int $page, int $limit): PaginatedResult
-    {
-        // Get paginated banners
-        $result = $this->bannerRepository->findPaginated($page, $limit);
-
-        // Return as value object
-        return PaginatedResult::fromRepositoryResult($result, $page, $limit);
-    }
-
-    /**
-     * Get a banner by ID
-     *
-     * @param int $id Banner ID
-     * @return Banner|null Banner entity or null if not found
-     */
-    public function getBannerById(int $id): ?Banner
-    {
-        return $this->bannerRepository->find($id);
-    }
-
-    /**
-     * Get a banner for a specific page
-     *
-     * @param string $page Page identifier
-     * @return Banner|null Banner entity or null if not found
-     */
-    public function getBannerByPage(string $page): ?Banner
-    {
-        return $this->cache->get('banner_page_' . $page, function (ItemInterface $item) use ($page) {
-            $item->expiresAfter(3600); // Cache for 1 hour
-            $item->tag(['banners']);
-
-            return $this->bannerRepository->findOneRandomByPage($page);
         });
     }
 
     /**
-     * Validate banner data
+     * Создает новый баннер
      *
-     * @param string $title Banner title
-     * @param string $type Banner type
-     * @param string $buttonText Button text
-     * @param string|null $promoText Promotional text
-     * @param string $buttonLink Button link URL
-     * @param array $pages Pages where the banner appears
-     * @param UploadedFile|null $image Banner image
-     * @return void
-     * @throws \InvalidArgumentException If validation fails
+     * @param CreateBannerRequest $request Запрос на создание баннера (уже валидированный)
+     * @return Banner Созданный баннер
+     * @throws FileException Если загрузка изображения не удалась
      */
-    private function validateBannerData(
-        string        $title,
-        string        $type,
-        string        $buttonText,
-        ?string       $promoText,
-        string        $buttonLink,
-        array         $pages,
-        ?UploadedFile $image = null
-    ): void
+    public function createBanner(CreateBannerRequest $request): Banner
     {
-        $constraints = new Assert\Collection([
-            'title' => [new Assert\NotBlank(), new Assert\Length(['max' => 255])],
-            'type' => [
-                new Assert\NotBlank(),
-                new Assert\Choice(['choices' => ['default', 'promo']])
-            ],
-            'button_text' => [new Assert\NotBlank(), new Assert\Length(['max' => 255])],
-            'promo_text' => [
-                new Assert\Optional([new Assert\Type('string')])
-            ],
-            'button_link' => [new Assert\NotBlank(), new Assert\Url()],
-            'pages' => [
-                new Assert\NotBlank(),
-                new Assert\All([
-                    new Assert\Choice([
-                        'choices' => ["player_detail", "player_list", "team_detail", "team_list"],
-                        'message' => "Invalid page value. Allowed values: player_detail, player_list, team_detail, team_list."
-                    ])
-                ])
-            ]
-        ]);
+        // Создание баннера
+        $banner = new Banner();
+        $banner->setTitle($request->title)
+            ->setType($request->type)
+            ->setButtonText($request->buttonText)
+            ->setPromoText($request->promoText)
+            ->setButtonLink($request->buttonLink)
+            ->setPages($request->pages);
 
-        $data = [
-            'title' => $title,
-            'type' => $type,
-            'button_text' => $buttonText,
-            'promo_text' => $promoText,
-            'button_link' => $buttonLink,
-            'pages' => $pages
-        ];
+        // Сохранение для получения ID
+        $this->entityManager->persist($banner);
+        $this->entityManager->flush();
 
-        $violations = $this->validator->validate($data, $constraints);
-
-        if (count($violations) > 0) {
-            $errors = [];
-            foreach ($violations as $violation) {
-                $errors[] = $violation->getPropertyPath() . ': ' . $violation->getMessage();
-            }
-            throw new \InvalidArgumentException(implode(', ', $errors));
+        // Загрузка изображения если предоставлено
+        if ($request->image) {
+            $imagePath = $this->uploadBannerImage($request->image, $banner->getId());
+            $banner->setImage($imagePath);
+            $this->entityManager->flush();
         }
 
-        // Validate image if provided
-        if ($image) {
-            $imageConstraint = new Assert\Image([
-                'maxSize' => '5M',
-                'mimeTypes' => ['image/jpeg', 'image/png', 'image/webp'],
-                'mimeTypesMessage' => 'Allowed image types are jpeg, png, webp.',
-            ]);
+        // Инвалидация кеша
+        $this->invalidateCache();
 
-            $imageViolations = $this->validator->validate($image, $imageConstraint);
-
-            if (count($imageViolations) > 0) {
-                $imageErrors = [];
-                foreach ($imageViolations as $violation) {
-                    $imageErrors[] = $violation->getMessage();
-                }
-                throw new \InvalidArgumentException(implode(', ', $imageErrors));
-            }
-        }
+        return $banner;
     }
 
     /**
-     * Invalidate banner cache
+     * Обновляет существующий баннер
+     *
+     * @param Banner $banner Баннер для обновления
+     * @param UpdateBannerRequest $request Запрос на обновление баннера (уже валидированный)
+     * @return Banner Обновленный баннер
+     * @throws FileException Если загрузка изображения не удалась
+     */
+    public function updateBanner(Banner $banner, UpdateBannerRequest $request): Banner
+    {
+        // Обновление баннера
+        $banner->setTitle($request->title)
+            ->setType($request->type)
+            ->setButtonText($request->buttonText)
+            ->setPromoText($request->promoText)
+            ->setButtonLink($request->buttonLink)
+            ->setPages($request->pages);
+
+        // Обновление изображения если предоставлено
+        if ($request->image) {
+            // Удаление старого изображения если существует
+            if ($banner->getImage()) {
+                $this->fileService->deleteFile($banner->getImage());
+            }
+
+            // Загрузка нового изображения
+            $imagePath = $this->uploadBannerImage($request->image, $banner->getId());
+            $banner->setImage($imagePath);
+        }
+
+        // Сохранение изменений
+        $this->entityManager->flush();
+
+        // Инвалидация кеша
+        $this->invalidateCache();
+
+        return $banner;
+    }
+
+    /**
+     * Удаляет баннер
+     *
+     * @param Banner $banner Баннер для удаления
+     * @return void
+     */
+    public function deleteBanner(Banner $banner): void
+    {
+        // Удаление изображения если существует
+        if ($banner->getImage()) {
+            $this->fileService->deleteFile($banner->getImage());
+        }
+
+        // Удаление баннера
+        $this->entityManager->remove($banner);
+        $this->entityManager->flush();
+
+        // Инвалидация кеша
+        $this->invalidateCache();
+    }
+
+    /**
+     * Получает баннер по ID
+     *
+     * @param int $id ID баннера
+     * @return Banner|null Баннер или null если не найден
+     */
+    public function getBannerById(int $id): ?Banner
+    {
+        $cacheKey = $this->cacheKeyFactory->bannerEntity($id);
+
+        return $this->cache->get($cacheKey, function (ItemInterface $item) use ($id) {
+            $item->expiresAfter(self::CACHE_TTL);
+            $item->tag([self::CACHE_TAG, 'banner_' . $id]);
+
+            return $this->bannerRepository->find($id);
+        });
+    }
+
+    /**
+     * Загружает изображение баннера
+     *
+     * @param UploadedFile $image Загруженное изображение
+     * @param int $bannerId ID баннера
+     * @return string Путь к изображению
+     * @throws FileException Если загрузка не удалась
+     */
+    private function uploadBannerImage(UploadedFile $image, int $bannerId): string
+    {
+        $targetDirectory = sprintf('%s/%d', $this->bannerImagesDir, $bannerId);
+
+        return $this->fileService->uploadFile($image, $targetDirectory, 'banner');
+    }
+
+    /**
+     * Инвалидирует кеш баннеров
      */
     private function invalidateCache(): void
     {
-        $this->cache->invalidateTags(['banners']);
+        $this->cache->invalidateTags([self::CACHE_TAG]);
     }
 }

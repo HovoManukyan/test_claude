@@ -5,12 +5,12 @@ declare(strict_types=1);
 namespace App\Service\Cache;
 
 /**
- * Factory service for generating consistent cache keys
+ * Фабрика ключей кеша для централизованного управления ключами
  */
 class CacheKeyFactory
 {
     /**
-     * Cache namespace prefixes for different entity types
+     * Префиксы пространства кеша для разных типов сущностей
      */
     private const KEY_PREFIX_TEAM = 'team';
     private const KEY_PREFIX_PLAYER = 'player';
@@ -19,15 +19,16 @@ class CacheKeyFactory
     private const KEY_PREFIX_SKIN = 'skin';
 
     /**
-     * Cache key types
+     * Типы кешей
      */
     private const TYPE_ENTITY = 'entity';
     private const TYPE_LIST = 'list';
+    private const TYPE_DETAIL = 'detail';
     private const TYPE_PAGE = 'page';
 
     /**
-     * @param string $environment Current application environment
-     * @param bool $debug Whether application is in debug mode
+     * @param string $environment Текущее окружение приложения
+     * @param bool $debug Включен ли режим отладки
      */
     public function __construct(
         private readonly string $environment,
@@ -36,7 +37,10 @@ class CacheKeyFactory
     }
 
     /**
-     * Generate a cache key for a team entity
+     * Создаёт ключ кеша для сущности команды
+     *
+     * @param int|string $identifier Идентификатор сущности
+     * @return string Ключ кеша
      */
     public function teamEntity(int|string $identifier): string
     {
@@ -44,7 +48,13 @@ class CacheKeyFactory
     }
 
     /**
-     * Generate a cache key for a team list with filters
+     * Создаёт ключ кеша для списка команд с фильтрами
+     *
+     * @param int $page Номер страницы
+     * @param int $limit Элементов на странице
+     * @param string|null $name Фильтр по имени
+     * @param array|null $locales Фильтр по локали
+     * @return string Ключ кеша
      */
     public function teamList(int $page, int $limit, ?string $name = null, ?array $locales = null): string
     {
@@ -59,7 +69,21 @@ class CacheKeyFactory
     }
 
     /**
-     * Generate a cache key for a player entity
+     * Создаёт ключ кеша для детальной информации о команде
+     *
+     * @param string $slug Slug команды
+     * @return string Ключ кеша
+     */
+    public function teamDetail(string $slug): string
+    {
+        return $this->buildKey(self::KEY_PREFIX_TEAM, self::TYPE_DETAIL, $slug);
+    }
+
+    /**
+     * Создаёт ключ кеша для сущности игрока
+     *
+     * @param int|string $identifier Идентификатор игрока
+     * @return string Ключ кеша
      */
     public function playerEntity(int|string $identifier): string
     {
@@ -67,7 +91,10 @@ class CacheKeyFactory
     }
 
     /**
-     * Generate a cache key for a player by slug
+     * Создаёт ключ кеша для игрока по slug
+     *
+     * @param string $slug Slug игрока
+     * @return string Ключ кеша
      */
     public function playerBySlug(string $slug): string
     {
@@ -75,7 +102,14 @@ class CacheKeyFactory
     }
 
     /**
-     * Generate a cache key for a player list with filters
+     * Создаёт ключ кеша для списка игроков с фильтрами
+     *
+     * @param int $page Номер страницы
+     * @param int $limit Элементов на странице
+     * @param bool|null $hasCrosshair Фильтр по наличию прицела
+     * @param array|null $teamSlugs Фильтр по командам
+     * @param string|null $name Фильтр по имени
+     * @return string Ключ кеша
      */
     public function playerList(int $page, int $limit, ?bool $hasCrosshair = null, ?array $teamSlugs = [], ?string $name = null): string
     {
@@ -91,7 +125,21 @@ class CacheKeyFactory
     }
 
     /**
-     * Generate a cache key for a banner entity
+     * Создаёт ключ кеша для детальной информации об игроке
+     *
+     * @param string $slug Slug игрока
+     * @return string Ключ кеша
+     */
+    public function playerDetail(string $slug): string
+    {
+        return $this->buildKey(self::KEY_PREFIX_PLAYER, self::TYPE_DETAIL, $slug);
+    }
+
+    /**
+     * Создаёт ключ кеша для сущности баннера
+     *
+     * @param int|string $identifier Идентификатор баннера
+     * @return string Ключ кеша
      */
     public function bannerEntity(int|string $identifier): string
     {
@@ -99,7 +147,10 @@ class CacheKeyFactory
     }
 
     /**
-     * Generate a cache key for a banner by page
+     * Создаёт ключ кеша для баннера по странице
+     *
+     * @param string $pageIdentifier Идентификатор страницы
+     * @return string Ключ кеша
      */
     public function bannerByPage(string $pageIdentifier): string
     {
@@ -107,7 +158,10 @@ class CacheKeyFactory
     }
 
     /**
-     * Generate a cache key for a tournament entity
+     * Создаёт ключ кеша для сущности турнира
+     *
+     * @param int|string $identifier Идентификатор турнира
+     * @return string Ключ кеша
      */
     public function tournamentEntity(int|string $identifier): string
     {
@@ -115,7 +169,13 @@ class CacheKeyFactory
     }
 
     /**
-     * Generate a cache key for a tournament list with filters
+     * Создаёт ключ кеша для списка турниров с фильтрами
+     *
+     * @param int $page Номер страницы
+     * @param int $limit Элементов на странице
+     * @param string|null $region Фильтр по региону
+     * @param string|null $tier Фильтр по уровню
+     * @return string Ключ кеша
      */
     public function tournamentList(int $page, int $limit, ?string $region = null, ?string $tier = null): string
     {
@@ -130,7 +190,10 @@ class CacheKeyFactory
     }
 
     /**
-     * Generate a cache key for a skin entity
+     * Создаёт ключ кеша для сущности скина
+     *
+     * @param int|string $identifier Идентификатор скина
+     * @return string Ключ кеша
      */
     public function skinEntity(int|string $identifier): string
     {
@@ -138,7 +201,12 @@ class CacheKeyFactory
     }
 
     /**
-     * Generate a cache key for a skin list with filters
+     * Создаёт ключ кеша для списка скинов с фильтрами
+     *
+     * @param int $page Номер страницы
+     * @param int $limit Элементов на странице
+     * @param string|null $name Фильтр по имени
+     * @return string Ключ кеша
      */
     public function skinList(int $page, int $limit, ?string $name = null): string
     {
@@ -152,30 +220,38 @@ class CacheKeyFactory
     }
 
     /**
-     * Build a cache key from parts
+     * Строит ключ кеша из частей
+     *
+     * @param string $prefix Префикс типа сущности
+     * @param string $type Тип операции (entity, list, detail)
+     * @param string $identifier Идентификатор
+     * @return string Ключ кеша
      */
     private function buildKey(string $prefix, string $type, string $identifier): string
     {
-        // Include environment in cache key to avoid sharing cache between environments
+        // Включаем окружение в ключ кеша, чтобы избежать конфликтов между окружениями
         return sprintf('%s_%s_%s_%s', $this->environment, $prefix, $type, $identifier);
     }
 
     /**
-     * Hash parameters to create a predictable identifier string
+     * Хэширует параметры для создания предсказуемого идентификатора
+     *
+     * @param array $params Параметры
+     * @return string Хэшированная строка
      */
     private function hashParams(array $params): string
     {
-        // Sort params to ensure consistent order
+        // Сортируем параметры для обеспечения постоянного порядка
         ksort($params);
 
-        // Process array parameters
+        // Обрабатываем параметры массива
         foreach ($params as $key => $value) {
             if (is_array($value)) {
                 sort($value);
                 $params[$key] = implode('_', $value);
             }
 
-            // Convert null/bool values to strings
+            // Преобразуем null/bool значения в строки
             if ($value === null) {
                 $params[$key] = 'null';
             } elseif (is_bool($value)) {
@@ -183,15 +259,15 @@ class CacheKeyFactory
             }
         }
 
-        // Create a string representation of params
+        // Создаем строковое представление параметров
         $paramsString = http_build_query($params);
 
-        // For readability in dev, keep the full key, but in prod we can use a hash
+        // Для читаемости в dev сохраняем полный ключ, в prod используем хэш
         if ($this->debug) {
             return $paramsString;
         }
 
-        // Use md5 for fixed-length keys that are safe for cache backends
+        // Используем md5 для фиксированной длины ключей, безопасных для бэкендов кеша
         return md5($paramsString);
     }
 }

@@ -2,12 +2,22 @@ doctrine:
     dbal:
         url: '%env(resolve:DATABASE_URL)%'
         # Use environment variable for server version
-        server_version: '%env(DATABASE_SERVER_VERSION)%'
+        server_version: '%database_server_version%'
 
         profiling_collect_backtrace: '%kernel.debug%'
         use_savepoints: true
+        driver: 'pdo_pgsql'
 
     orm:
+        dql:
+            numeric_functions:
+                random: App\Doctrine\RandomFunction
+        second_level_cache:
+            enabled: true
+            region_lifetime: 3600
+            region_cache_driver:
+                type: service  # Используем системный сервис кеширования
+                id: cache.system  # Встроенный сервис кеширования
         auto_generate_proxy_classes: true
         enable_lazy_ghost_objects: true
         report_fields_where_declared: true
@@ -34,6 +44,7 @@ doctrine:
         result_cache_driver:
             type: pool
             pool: doctrine.result_cache_pool
+
 
 when@test:
     doctrine:
