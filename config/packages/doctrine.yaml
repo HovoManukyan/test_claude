@@ -12,6 +12,8 @@ doctrine:
         dql:
             numeric_functions:
                 random: App\Doctrine\RandomFunction
+            string_functions:
+                JSONB_CONTAINS: Scienta\DoctrineJsonFunctions\Query\AST\Functions\Postgresql\JsonbContains
         second_level_cache:
             enabled: true
             region_lifetime: 3600

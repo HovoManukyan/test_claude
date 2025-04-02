@@ -3,140 +3,69 @@
 namespace App\Service;
 
 use App\Entity\Player;
-use App\Entity\Skin;
-use DateTime;
-use Exception;
-use Symfony\Component\Validator\Constraints as Assert;
+use App\Repository\PlayerRepository;
+use App\Repository\SkinRepository;
+use App\Repository\TeamRepository;
+use App\Request\Player\PlayerUpdateRequest;
+use App\Service\Http\HttpClientService;
+use DateTimeImmutable;
 use Doctrine\ORM\EntityManagerInterface;
-use Symfony\Component\Validator\Validator\ValidatorInterface;
-use Symfony\Contracts\Cache\ItemInterface;
-use Symfony\Contracts\Cache\TagAwareCacheInterface;
+use Exception;
+use Symfony\Component\Filesystem\Filesystem;
 
 class PlayerService
 {
-    private EntityManagerInterface $entityManager;
-    private ValidatorInterface $validator;
-    private TagAwareCacheInterface $cache;
 
-    public function __construct(EntityManagerInterface $entityManager, ValidatorInterface $validator, TagAwareCacheInterface $cache)
+    private const PUBLIC_PATH = '/cdn/players';
+
+    public function __construct(
+        private readonly EntityManagerInterface $entityManager,
+        private readonly SkinRepository         $skinRepository,
+        private readonly PlayerRepository       $playerRepository,
+        private readonly TeamRepository         $teamRepository,
+        private readonly Filesystem             $filesystem,
+        private readonly HttpClientService      $httpClientService,
+        #[Autowire('%player_images_dir%')]
+        private readonly string                 $playerImagesDir,
+    )
     {
-        $this->entityManager = $entityManager;
-        $this->validator = $validator;
-        $this->cache = $cache;
     }
 
-
-
-    public function getPlayerBySlug(string $slug): ?Player
+    public function updatePlayer(Player $player, PlayerUpdateRequest $request): Player
     {
-        $cacheKey = 'player_slug_' . $slug;
+        $player->setFirstName($request->getFirstName());
+        $player->setLastName($request->getLastName());
+        $player->setBio($request->getBio());
+        $player->setSocials($request->getSocials() ?? []);
 
-        return $this->cache->get($cacheKey, function (ItemInterface $item) use ($slug) {
-            $item->expiresAfter(300); // Кэш на 5 минут
-            $item->tag('players');
-
-            // Using repository with explicit joins to ensure all related entities are loaded
-            $player = $this->entityManager->getRepository(Player::class)
-                ->createQueryBuilder('p')
-                ->leftJoin('p.teams', 't')
-                ->leftJoin('p.currentTeam', 'ct')
-                ->leftJoin('p.skins', 's')
-                ->where('p.slug = :slug')
-                ->setParameter('slug', $slug)
-                ->getQuery()
-                ->getOneOrNullResult();
-
-            // Initialize all entity relations to prevent lazy loading issues after caching
-            if ($player) {
-                $this->initializePlayerRelations($player);
-            }
-
-            return $player;
-        });
-    }
-
-    private function initializePlayerRelations(Player $player): void
-    {
-        // Initialize teams collection
-        if ($player->getTeams()) {
-            foreach ($player->getTeams() as $team) {
-                // Access key properties to ensure initialization
-                $team->getId();
-                $team->getName();
-                $team->getSlug();
-                $team->getImage();
-                $team->getPandascoreId(); // Ensure this property is initialized
-
-                // Initialize any other Team properties that cause errors
-                // For example, if there are other Team properties that need to be initialized:
-                // $team->getOtherProperty();
-            }
+        if ($request->getBirthday()) {
+            $player->setBirthday(new \DateTimeImmutable($request->getBirthday()));
         }
 
-        // Initialize current team if present
-        if ($player->getCurrentTeam()) {
-            $player->getCurrentTeam()->getId();
-            $player->getCurrentTeam()->getName();
-            $player->getCurrentTeam()->getSlug();
-            $player->getCurrentTeam()->getImage();
-            $player->getCurrentTeam()->getPandascoreId(); // Ensure this property is initialized
+        $crosshair = $request->getCrosshair();
+        if ($crosshair === null) {
+            $player->setCrosshair(null);
+        } else {
+            $player->setCrosshair([
+                'crosshairId' => $crosshair->getCrosshairId(),
+                'style' => $crosshair->getStyle(),
+                'size' => $crosshair->getSize(),
+                'thickness' => $crosshair->getThickness(),
+                'tShape' => $crosshair->getTShape(),
+                'dot' => $crosshair->getDot(),
+                'gap' => $crosshair->getGap(),
+                'alpha' => $crosshair->getAlpha(),
+                'color' => $crosshair->getColor(),
+                'colorR' => $crosshair->getColorR(),
+                'colorG' => $crosshair->getColorG(),
+                'colorB' => $crosshair->getColorB(),
+            ]);
         }
 
-        // Initialize skins collection
-        if ($player->getSkins()) {
-            foreach ($player->getSkins() as $skin) {
-                $skin->getId();
-                // Initialize any other Skin properties that are needed
-            }
-        }
-
-        // Add any other relations that need to be initialized
-    }
-
-    public function updatePlayer(int $id, array $data): Player
-    {
-        $player = $this->entityManager->getRepository(Player::class)->find($id);
-
-        if (!$player) {
-            throw new \InvalidArgumentException('Player not found.');
-        }
-
-        if (array_key_exists('crosshair', $data)) {
-            if ($data['crosshair'] === null) {
-                $player->setCrosshair(null);
-            } else {
-                $violations = $this->validateCrosshair($data['crosshair']);
-                if (!empty($violations)) {
-                    throw new \InvalidArgumentException(implode(', ', $violations));
-                }
-                $player->setCrosshair($data['crosshair']);
-            }
-        }
-
-        if (isset($data['firstName'])) {
-            $player->setFirstName($data['firstName']);
-        }
-
-        if (isset($data['lastName'])) {
-            $player->setLastName($data['lastName']);
-        }
-
-        if (isset($data['birthday'])) {
-            $player->setBirthday(new DateTime($data['birthday']));
-        }
-
-        if (isset($data['bio'])) {
-            $player->setBio($data['bio']);
-        }
-
-        if (isset($data['socials']) && is_array($data['socials'])) {
-            $player->setSocials($data['socials']);
-        }
-
-        if (isset($data['skins']) && is_array($data['skins'])) {
+        if ($request->getSkins()) {
             $player->getSkins()->clear();
-            foreach ($data['skins'] as $skinId) {
-                $skin = $this->entityManager->getRepository(Skin::class)->find($skinId);
+            foreach ($request->getSkins() as $skinId) {
+                $skin = $this->skinRepository->find($skinId);
                 if ($skin) {
                     $player->addSkin($skin);
                 }
@@ -144,226 +73,126 @@ class PlayerService
         }
 
         $this->entityManager->flush();
-
-        $this->cache->invalidateTags(['players', 'admin_players']);
-
-        $this->cache->delete('player_' . $id);
-        if ($player->getSlug()) {
-            $this->cache->delete('player_slug_' . $player->getSlug());
-        }
-
         return $player;
     }
 
-    public function validateCrosshair(?array $crosshair): array
+    /**
+     * Получаем данные из запроса в пандаскор, проверяем и добавляем их в базу пачкой
+     *
+     * @param array $players
+     * @return void
+     * @throws Exception
+     */
+    public function syncBatchFromApi(array $players): void
     {
-        if ($crosshair === null) {
-            return [];
+        $ids = array_column($players, 'id');
+        $existingPlayers = $this->playerRepository->findBy(['pandascoreId' => $ids]);
+
+        $playerMap = [];
+        foreach ($existingPlayers as $player) {
+            $playerMap[$player->getPandascoreId()] = $player;
         }
 
-        $constraints = new Assert\Collection([
-            'crosshairId' => [
-                new Assert\NotBlank(['allowNull' => true]),
-                new Assert\Type(['type' => ['integer', 'null']])
-            ],
-            'style' => [
-                new Assert\Type('bool')
-            ],
-            'size' => [
-                new Assert\Type('numeric'),
-                new Assert\Range(['min' => 0.5, 'max' => 25]),
-                new Assert\DivisibleBy(0.5)
-            ],
-            'thickness' => [
-                new Assert\Type('numeric'),
-                new Assert\Range(['min' => 0.5, 'max' => 20]),
-                new Assert\DivisibleBy(0.5)
-            ],
-            'tShape' => [
-                new Assert\Type('bool')
-            ],
-            'dot' => [
-                new Assert\Type('bool')
-            ],
-            'gap' => [
-                new Assert\Type('integer'),
-                new Assert\Range(['min' => -100, 'max' => 100])
-            ],
-            'alpha' => [
-                new Assert\Type('integer'),
-                new Assert\Range(['min' => 0, 'max' => 255])
-            ],
-            'color' => [
-                new Assert\Choice([0, 1, 2, 3, 4, 5])
-            ],
-            'colorR' => [
-                new Assert\Optional([
-                    new Assert\Type('integer'),
-                    new Assert\Range(['min' => 0, 'max' => 255])
-                ])
-            ],
-            'colorG' => [
-                new Assert\Optional([
-                    new Assert\Type('integer'),
-                    new Assert\Range(['min' => 0, 'max' => 255])
-                ])
-            ],
-            'colorB' => [
-                new Assert\Optional([
-                    new Assert\Type('integer'),
-                    new Assert\Range(['min' => 0, 'max' => 255])
-                ])
-            ],
-        ]);
+        foreach ($players as $data) {
+            $id = $data['id'];
 
-        $violations = $this->validator->validate($crosshair, $constraints);
+            $player = $playerMap[$id] ?? new Player();
+            $player->setPandascoreId($id);
+            $player->setFirstName($data['first_name'] ?? null);
+            $player->setLastName($data['last_name'] ?? null);
+            $player->setName($data['name'] ?? 'Unknown');
+            $player->setSlug($data['slug'] ?? null);
+            $player->setNationality($data['nationality'] ?? null);
 
-        if (count($violations) > 0) {
-            $errors = [];
-            foreach ($violations as $violation) {
-                $errors[] = $violation->getPropertyPath() . ': ' . $violation->getMessage();
+            if (!empty($data['image_url'])) {
+                $player->setImage($data['image_url']);
             }
-            return $errors;
+
+            $player->setBirthday(isset($data['birthday']) ? new DateTimeImmutable($data['birthday']) : null);
+
+            if (isset($data['current_team']['id'])) {
+                $teamId = $data['current_team']['id'];
+                $team = $this->teamRepository->findOneBy(['pandascoreId' => $teamId]);
+                if ($team) {
+                    $player->setCurrentTeam($team);
+                    $player->addTeam($team);
+                }
+            }
+
+            $this->entityManager->persist($player);
         }
 
-        return [];
+        $this->entityManager->flush();
     }
 
-    private function isValidFloatStep(float $value, float $min, float $max, float $step): bool
+    /**
+     * @param Player $player
+     * @return bool
+     */
+    public function downloadPlayerImage(Player $player): bool
     {
-        if ($value < $min || $value > $max) {
+        $imageUrl = $player->getImage();
+        if (!$imageUrl) {
             return false;
         }
 
-        return fmod($value - $min, $step) === 0.0;
+        $extension = pathinfo(parse_url($imageUrl, PHP_URL_PATH), PATHINFO_EXTENSION) ?: 'jpg';
+        $filename = sprintf('%s.%s', $player->getPandascoreId(), $extension);
+        $targetPath = $this->playerImagesDir . '/' . $filename;
+
+        if ($this->filesystem->exists($targetPath)) {
+            $player->setImage(self::PUBLIC_PATH . $filename);
+            $this->entityManager->persist($player);
+            return true;
+        }
+
+        $content = $this->httpClientService->downloadFile($imageUrl);
+        $this->filesystem->dumpFile($targetPath, $content);
+
+        $player->setImage(self::PUBLIC_PATH . $filename);
+        $this->entityManager->persist($player);
+        return true;
     }
 
     /**
-     * Получить список всех игроков с пагинацией и фильтрацией по прицелу
-     *
-     * @param int  $page         Номер страницы
-     * @param int  $limit        Количество записей на страницу
-     * @param bool $hasCrosshair Фильтр на наличие прицела
-     *
-     * @return Player[]
+     * @param Player $player
+     * @param array $data
+     * @return void
      */
-    public function getAllPlayers(int $page, int $limit, ?bool $hasCrosshair = null, ?array $teamSlugs = [], ?string $name = null): array
+    public function updatePlayerStats(Player $player, array $data): void
     {
-        // 🔥 Уникальный ключ кэша на основе параметров
-        $cacheKey = sprintf(
-            'players_page_%d_limit_%d_crosshair_%s_teamSlugs_%s_name_%s',
-            $page,
-            $limit,
-            $hasCrosshair !== null ? (int) $hasCrosshair : 'all',
-            implode(',', $teamSlugs),
-            $name ?? 'all'
-        );
+        echo 'updating player stats for player '. $player->getSlug() . ' | ';
+        if (!empty($data['current_team']['id'])) {
+            $currentTeamId = (string) $data['current_team']['id'];
+            $currentTeam = $this->teamRepository->findOneBy(['pandascoreId' => $currentTeamId]);
 
-        return $this->cache->get($cacheKey, function (ItemInterface $item) use ($page, $limit, $hasCrosshair, $teamSlugs, $name) {
-            $item->expiresAfter(600); // Кэш на 10 минут
-            $item->tag('players');
-
-            $offset = ($page - 1) * $limit;
-
-            $qb = $this->entityManager->getRepository(Player::class)->createQueryBuilder('p');
-
-            if ($hasCrosshair !== null) {
-                $qb->andWhere($hasCrosshair ? 'p.crosshair IS NOT NULL' : 'p.crosshair IS NULL');
+            if ($currentTeam && $player->getCurrentTeam()?->getPandascoreId() !== $currentTeamId) {
+                $player->setCurrentTeam($currentTeam);
             }
+        }
 
-            if (!empty($teamSlugs)) {
-                $qb->join('p.teams', 't')
-                    ->andWhere('t.slug IN (:teamSlugs)')
-                    ->setParameter('teamSlugs', $teamSlugs);
+        if (!empty($data['last_games']) && is_array($data['last_games'])) {
+            $player->setLastGames($data['last_games']);
+        }
+
+        if (!empty($data['stats']) && is_array($data['stats'])) {
+            $player->setStats($data['stats']);
+        }
+
+        if (!empty($data['teams']) && is_array($data['teams'])) {
+            foreach ($data['teams'] as $teamData) {
+                if (!isset($teamData['id'])) {
+                    continue;
+                }
+
+                $team = $this->teamRepository->findOneBy(['pandascoreId' => (string)$teamData['id']]);
+                if ($team && !$player->getTeams()->contains($team)) {
+                    $player->addTeam($team);
+                }
             }
+        }
 
-            if ($name !== null) {
-                $qb->andWhere(
-                    $qb->expr()->orX(
-                        $qb->expr()->like('LOWER(p.firstName)', ':name'),
-                        $qb->expr()->like('LOWER(p.lastName)', ':name'),
-                        $qb->expr()->like('LOWER(p.name)', ':name')
-                    )
-                )->setParameter('name', '%' . strtolower($name) . '%');
-            }
-
-            // ✅ Подсчёт общего количества записей
-            $total = (clone $qb)
-                ->select('COUNT(p.id)')
-                ->getQuery()
-                ->getSingleScalarResult();
-
-            $players = $qb
-                ->orderBy('p.id', 'ASC')
-                ->setFirstResult($offset)
-                ->setMaxResults($limit)
-                ->getQuery()
-                ->getResult();
-
-            return [
-                'total' => (int) $total,
-                'pages' => $limit > 0 ? (int) ceil($total / $limit) : 1,
-                'data' => $players,
-            ];
-        });
+        $this->entityManager->persist($player);
     }
-
-
-
-    /**
-     * Получить список всех игроков для админки с пагинацией и фильтрацией по прицелу
-     *
-     * @param int $page Номер страницы
-     * @param int $limit Количество записей на страницу
-     * @param array $filters
-     * @return Player[]
-     */
-    public function getAllPlayersForAdmin(int $page, int $limit, array $filters = []): array
-    {
-        $offset = ($page - 1) * $limit;
-        $qb = $this->entityManager->getRepository(Player::class)->createQueryBuilder('p');
-
-        if (!empty($filters['name'])) {
-            $qb->andWhere('LOWER(p.name) LIKE :name')
-                ->setParameter('name', '%' . strtolower($filters['name']) . '%');
-        }
-
-        if (!empty($filters['team'])) {
-            $qb->join('p.team', 't')
-                ->andWhere('LOWER(t.name) LIKE :team')
-                ->setParameter('team', '%' . strtolower($filters['team']) . '%');
-        }
-
-        if (!empty($filters['country'])) {
-            $qb->andWhere('p.country = :country')
-                ->setParameter('country', $filters['country']);
-        }
-
-        if (isset($filters['hasCrosshair'])) {
-            if ($filters['hasCrosshair']) {
-                $qb->andWhere('p.crosshair IS NOT NULL');
-            } else {
-                $qb->andWhere('p.crosshair IS NULL');
-            }
-        }
-
-        $total = (clone $qb)
-            ->select('COUNT(p.id)')
-            ->getQuery()
-            ->getSingleScalarResult();
-
-        $players = $qb
-            ->orderBy('p.id', 'ASC')
-            ->setFirstResult($offset)
-            ->setMaxResults($limit)
-            ->getQuery()
-            ->getResult();
-
-        return [
-            'players' => $players,
-            'total' => (int) $total
-        ];
-    }
-
 
 }

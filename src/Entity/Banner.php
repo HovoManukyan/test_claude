@@ -4,10 +4,11 @@ namespace App\Entity;
 
 use App\Repository\BannerRepository;
 use Doctrine\ORM\Mapping as ORM;
+use Symfony\Component\Serializer\Attribute\Groups;
 use Symfony\Component\Validator\Constraints as Assert;
 
 #[ORM\Entity(repositoryClass: BannerRepository::class)]
-#[ORM\Table(name: "banner")]
+#[ORM\Table(name: 'banner')]
 #[ORM\HasLifecycleCallbacks]
 class Banner extends AbstractEntity
 {
@@ -30,55 +31,62 @@ class Banner extends AbstractEntity
      */
     #[ORM\Id]
     #[ORM\GeneratedValue]
-    #[ORM\Column(type: "integer")]
+    #[ORM\Column(type: 'integer')]
+    #[Groups(['banner:default'])]
     private int $id;
 
     /**
      * @var string Banner type (default or promo)
      */
-    #[ORM\Column(type: "string", length: 50)]
+    #[ORM\Column(type: 'string', length: 50)]
     #[Assert\NotBlank]
-    #[Assert\Choice(choices: [self::TYPE_DEFAULT, self::TYPE_PROMO], message: "Invalid type. Allowed values: default, promo.")]
+    #[Assert\Choice(choices: [self::TYPE_DEFAULT, self::TYPE_PROMO], message: 'Invalid type. Allowed values: default, promo.')]
+    #[Groups(['banner:default'])]
     private string $type;
 
     /**
      * @var string Banner title
      */
-    #[ORM\Column(type: "string", length: 255)]
+    #[ORM\Column(type: 'string', length: 255)]
     #[Assert\NotBlank]
+    #[Groups(['banner:default'])]
     private string $title;
 
     /**
      * @var string|null Banner image URL
      */
-    #[ORM\Column(type: "string", length: 255, nullable: true)]
+    #[ORM\Column(type: 'string', length: 255, nullable: true)]
+    #[Groups(['banner:default'])]
     private ?string $image = null;
 
     /**
      * @var string Button text
      */
-    #[ORM\Column(type: "string", length: 255)]
+    #[ORM\Column(type: 'string', length: 255)]
     #[Assert\NotBlank]
+    #[Groups(['banner:default'])]
     private string $buttonText;
 
     /**
      * @var string|null Promotional text
      */
-    #[ORM\Column(type: "text", nullable: true)]
+    #[ORM\Column(type: 'text', nullable: true)]
+    #[Groups(['banner:default'])]
     private ?string $promoText = null;
 
     /**
      * @var string Button link URL
      */
-    #[ORM\Column(type: "string", length: 255)]
+    #[ORM\Column(type: 'string', length: 255)]
     #[Assert\NotBlank]
     #[Assert\Url]
+    #[Groups(['banner:default'])]
     private string $buttonLink;
 
     /**
      * @var array Pages where the banner appears
      */
-    #[ORM\Column(type: "json", options: ["jsonb" => true])]
+    #[ORM\Column(type: 'json', options: ['jsonb' => true])]
     #[Assert\NotBlank]
     #[Assert\All([
         new Assert\Choice(choices: [
@@ -86,8 +94,9 @@ class Banner extends AbstractEntity
             self::PAGE_PLAYER_LIST,
             self::PAGE_TEAM_DETAIL,
             self::PAGE_TEAM_LIST
-        ], message: "Invalid page value.")
+        ], message: 'Invalid page value.')
     ])]
+    #[Groups(['banner:default'])]
     private array $pages = [];
 
     /**

@@ -5,14 +5,18 @@ declare(strict_types=1);
 namespace App\Repository;
 
 use App\Entity\Team;
-use Doctrine\ORM\Tools\Pagination\Paginator;
+use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
+use Doctrine\ORM\QueryBuilder;
 use Doctrine\Persistence\ManagerRegistry;
 use Symfony\Component\String\Slugger\SluggerInterface;
 
 /**
- * @extends BaseRepository<Team>
+ * @method Team|null find($id, $lockMode = null, $lockVersion = null)
+ * @method Team|null findOneBy(array $criteria, array $orderBy = null)
+ * @method Team[]    findAll()
+ * @method Team[]    findBy(array $criteria, array $orderBy = null, $limit = null, $offset = null)
  */
-class TeamRepository extends BaseRepository
+class TeamRepository extends ServiceEntityRepository
 {
     public function __construct(
         ManagerRegistry $registry,
@@ -22,41 +26,32 @@ class TeamRepository extends BaseRepository
     }
 
     /**
-     * Поиск команд с пагинацией и связями
+     * Поиск команд с фильтрами
      *
-     * @param int $page Номер страницы
-     * @param int $limit Элементов на странице
      * @param string|null $name Фильтр по имени
-     * @param array|null $locales Фильтр по локациям
-     * @return Paginator<Team> Пагинатор с командами
+     * @param array|null $locations Фильтр по локациям
+     * @return QueryBuilder
      */
-    public function findPaginatedWithRelations(
-        int $page,
-        int $limit,
+    public function getSearchQueryBuilder(
         ?string $name = null,
-        ?array $locales = null
-    ): Paginator {
-        $qb = $this->createQueryBuilder('t')
-            // Предзагрузка основных связей
-            ->leftJoin('t.players', 'p')->addSelect('p');
+        ?array $locations = null
+    ): QueryBuilder {
+        $qb = $this->createQueryBuilder('t');
 
-        // Применяем фильтр по имени
-        if ($name !== null && $name !== '') {
-            $qb->andWhere('LOWER(t.name) LIKE LOWER(:name)')
-                ->setParameter('name', '%' . trim($name) . '%');
+        if ($name) {
+            $name = str_replace(['%', '_'], '', $name);
+
+            $qb->andWhere(
+                $qb->expr()->like('LOWER(t.name)', ':name')
+            )->setParameter('name', '%' . strtolower($name) . '%');
         }
 
-        // Применяем фильтр по локациям
-        if (!empty($locales)) {
-            $qb->andWhere('t.location IN (:locales)')
-                ->setParameter('locales', $locales);
+        if (!empty($locations)) {
+            $qb->andWhere('t.location IN (:locations)')
+                ->setParameter('locations', $locations);
         }
 
-        // Сортировка по умолчанию
-        $qb->orderBy('t.name', 'ASC');
-
-        // Создаем экземпляр Doctrine Paginator
-        return $this->createPaginator($qb, $page, $limit);
+        return $qb->orderBy('t.name', 'ASC');
     }
 
     /**
@@ -137,4 +132,23 @@ class TeamRepository extends BaseRepository
 
         return $slug . '-' . $nextNumber;
     }
+
+    public function getTeamImageQueryBuilder(): QueryBuilder
+    {
+        return $this->createQueryBuilder('t')
+            ->where('t.image LIKE :prefix')
+            ->setParameter('prefix', 'https://%');
+    }
+
+    public function findWithPlayersByPandascoreId(string $pandascoreId): ?Team
+    {
+        return $this->createQueryBuilder('t')
+            ->leftJoin('t.players', 'p')
+            ->addSelect('p')
+            ->where('t.pandascoreId = :pid')
+            ->setParameter('pid', $pandascoreId)
+            ->getQuery()
+            ->getOneOrNullResult();
+    }
+
 }

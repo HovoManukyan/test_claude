@@ -31,7 +31,6 @@ final class BannerService
         private readonly FileService $fileService,
         private readonly TagAwareCacheInterface $cache,
         private readonly CacheKeyFactory $cacheKeyFactory,
-        private readonly LoggerInterface $logger,
         private readonly string $bannerImagesDir
     ) {
     }
@@ -44,22 +43,7 @@ final class BannerService
      */
     public function getBannerForPage(string $pageIdentifier): ?Banner
     {
-        $cacheKey = $this->cacheKeyFactory->bannerByPage($pageIdentifier);
-
-        return $this->cache->get($cacheKey, function (ItemInterface $item) use ($pageIdentifier) {
-            $item->expiresAfter(self::CACHE_TTL);
-            $item->tag([self::CACHE_TAG]);
-
-            try {
-                return $this->bannerRepository->findOneRandomByPage($pageIdentifier);
-            } catch (\Exception $e) {
-                $this->logger->error('Error finding banner for page', [
-                    'page' => $pageIdentifier,
-                    'error' => $e->getMessage()
-                ]);
-                return null;
-            }
-        });
+        return $this->bannerRepository->findOneRandomByPage($pageIdentifier);
     }
 
     /**
@@ -107,7 +91,6 @@ final class BannerService
      */
     public function updateBanner(Banner $banner, UpdateBannerRequest $request): Banner
     {
-        // Обновление баннера
         $banner->setTitle($request->title)
             ->setType($request->type)
             ->setButtonText($request->buttonText)
@@ -115,23 +98,16 @@ final class BannerService
             ->setButtonLink($request->buttonLink)
             ->setPages($request->pages);
 
-        // Обновление изображения если предоставлено
         if ($request->image) {
-            // Удаление старого изображения если существует
             if ($banner->getImage()) {
                 $this->fileService->deleteFile($banner->getImage());
             }
 
-            // Загрузка нового изображения
             $imagePath = $this->uploadBannerImage($request->image, $banner->getId());
             $banner->setImage($imagePath);
         }
 
-        // Сохранение изменений
         $this->entityManager->flush();
-
-        // Инвалидация кеша
-        $this->invalidateCache();
 
         return $banner;
     }
@@ -144,17 +120,13 @@ final class BannerService
      */
     public function deleteBanner(Banner $banner): void
     {
-        // Удаление изображения если существует
         if ($banner->getImage()) {
             $this->fileService->deleteFile($banner->getImage());
         }
 
-        // Удаление баннера
         $this->entityManager->remove($banner);
         $this->entityManager->flush();
 
-        // Инвалидация кеша
-        $this->invalidateCache();
     }
 
     /**

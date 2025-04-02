@@ -4,107 +4,73 @@ declare(strict_types=1);
 
 namespace App\Controller\Site;
 
+use App\Doctrine\Paginator;
+use App\Entity\Team;
+use App\Repository\BannerRepository;
 use App\Repository\TeamRepository;
-use App\Request\Team\TeamDetailRequest;
 use App\Request\Team\TeamListRequest;
-use App\Response\Team\TeamDetailResponse;
-use App\Response\Team\TeamListResponse;
 use App\Service\BannerService;
 use App\Service\Cache\CacheKeyFactory;
+use App\Trait\HttpControllerTrait;
+use Symfony\Bridge\Doctrine\Attribute\MapEntity;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpKernel\Attribute\MapQueryString;
 use Symfony\Component\Routing\Attribute\Route;
-use Symfony\Contracts\Cache\ItemInterface;
 use Symfony\Contracts\Cache\TagAwareCacheInterface;
 
 #[Route('/teams', name: 'app_teams_')]
 final class TeamsController extends AbstractController
 {
+    use HttpControllerTrait;
+
+    private const BANNER_FOR_LIST = 'team_list';
+    private const BANNER_FOR_PLAYER = 'team_detail';
+
     public function __construct(
-        private readonly TeamRepository $teamRepository,
-        private readonly BannerService $bannerService,
+        private readonly TeamRepository         $teamRepository,
+        private readonly BannerService          $bannerService,
         private readonly TagAwareCacheInterface $cache,
-        private readonly CacheKeyFactory $cacheKeyFactory,
-    ) {
+        private readonly CacheKeyFactory        $cacheKeyFactory,
+    )
+    {
     }
 
     #[Route('', name: 'list', methods: ['GET'])]
     public function listTeams(
-        #[MapQueryString] TeamListRequest $request
-    ): JsonResponse {
-        $cacheKey = $this->cacheKeyFactory->teamList(
-            $request->page,
-            $request->limit,
-            $request->name,
-            $request->locale
-        );
+        #[MapQueryString] TeamListRequest $request,
+        TeamRepository                    $repository,
+        BannerRepository                  $bannerRepository
+    ): JsonResponse
+    {
+        $page = $request->getPage();
+        $limit = $request->getLimit();
+        $name = $request->getName();
+        $locale = $request->getLocale();
 
-        $data = $this->cache->get($cacheKey, function (ItemInterface $item) use ($request) {
-            $item->expiresAfter(600);
-            $item->tag(['teams', 'team_list']);
+        $qb = $repository->getSearchQueryBuilder($name, $locale);
+        $paginator = new Paginator($qb, $limit);
+        $results = $paginator->paginate($page)->getResults();
+        $banner = $bannerRepository->findOneRandomByPage(self::BANNER_FOR_LIST);
 
-            // Получаем команды с пагинацией
-            $paginatedTeams = $this->teamRepository->findPaginatedWithRelations(
-                $request->page,
-                $request->limit,
-                $request->name,
-                $request->locale
-            );
-
-            // Получаем баннер для страницы списка команд
-            $banner = $this->bannerService->getBannerForPage('team_list');
-
-            // Создаем объект ответа
-            return TeamListResponse::fromPaginator(
-                $paginatedTeams,
-                $request->page,
-                $request->limit,
-                $banner
-            );
-        });
-
-        return $this->json($data);
+        return $this->successResponse([
+            'data' => $results,
+            'banner' => $banner,
+            'meta' => $paginator->getMetadata()
+        ], ['paginator', 'team:list', 'banner:default']);
     }
 
     #[Route('/{slug}', name: 'show', methods: ['GET'])]
     public function getTeam(
-        string $slug,
-        #[MapQueryString] TeamDetailRequest $request
-    ): JsonResponse {
-        $cacheKey = $this->cacheKeyFactory->teamDetail($slug);
+        #[MapEntity(mapping: ['slug' => 'slug'])] Team $team,
+        BannerRepository                               $bannerRepository
+    ): JsonResponse
+    {
+        $banner = $bannerRepository->findOneRandomByPage(self::BANNER_FOR_PLAYER);
 
-        $data = $this->cache->get($cacheKey, function (ItemInterface $item) use ($slug) {
-            $item->expiresAfter(600);
-            $item->tag(['teams', 'team_' . $slug]);
-
-            // Получаем команду со всеми связями
-            $team = $this->teamRepository->findBySlugWithRelations($slug);
-
-            if (!$team) {
-                throw $this->createNotFoundException('Team not found');
-            }
-
-            // Получаем баннер для страницы детальной информации
-            $banner = $this->bannerService->getBannerForPage('team_detail');
-
-            // Получаем случайные команды для рекомендаций
-            $otherTeams = $this->teamRepository->findRandom(12);
-
-            // Фильтруем текущую команду из рекомендаций
-            $otherTeams = array_filter(
-                $otherTeams,
-                fn($otherTeam) => $otherTeam->getId() !== $team->getId()
-            );
-
-            // Создаем объект ответа
-            return TeamDetailResponse::fromEntities(
-                $team,
-                $banner,
-                array_values($otherTeams)
-            );
-        });
-
-        return $this->json($data);
+        return $this->successResponse([
+            'team' => $team,
+            'banner' => $banner
+        ], ['team:detail', 'banner:default']);
     }
 }

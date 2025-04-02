@@ -6,176 +6,94 @@ use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\Common\Collections\Collection;
 use Doctrine\ORM\Mapping as ORM;
 use Symfony\Component\Serializer\Attribute\Groups;
-use Symfony\Component\Serializer\Attribute\MaxDepth;
 
 #[ORM\Entity]
 class Player
 {
     #[ORM\Id]
     #[ORM\GeneratedValue]
-    #[ORM\Column(type: "integer", length: 11, unique: true)]
-    #[Groups([
-        "player:list",
-        "player:admin:details",
-        "player:admin:list",
-        "team:details"
-    ])]
+    #[ORM\Column(type: 'integer', length: 11, unique: true)]
+    #[Groups(['player:detail', 'player:list', 'team:detail'])]
     private int $id;
 
-    #[ORM\Column(type: "string", length: 36, unique: true)]
-    #[Groups([
-        "player:list",
-        "player:admin:details",
-        "player:admin:list",
-        "team:details"
-    ])]
-    private string $pandascore_id;
+    #[ORM\Column(type: 'string', length: 36, unique: true)]
+    #[Groups(['player:detail', 'player:list', 'team:detail'])]
+    private string $pandascoreId;
 
-    #[ORM\Column(type: "string", length: 255)]
-    #[Groups([
-        "player:list",
-        "player:admin:details",
-        "player:admin:list",
-        "team:details"
-    ])]
+    #[ORM\Column(type: 'string', length: 255)]
+    #[Groups(['player:detail', 'player:list', 'team:detail'])]
     private string $name;
 
-    #[ORM\ManyToOne(targetEntity: Team::class, inversedBy: "players")]
+    #[ORM\ManyToOne(targetEntity: Team::class, inversedBy: 'players')]
     #[ORM\JoinColumn(nullable: true)]
-    #[Groups([
-        "player:list",
-        "player:admin:list",
-        "player:admin:details:team"
-    ])]
+    #[Groups(['player:detail', 'player:list'])]
     private ?Team $currentTeam = null;
 
     #[ORM\ManyToMany(targetEntity: Team::class)]
-    #[ORM\JoinTable(name: "player_teams")]
-    #[MaxDepth(1)]
-    #[Groups([
-        "player:admin:list"
-    ])]
+    #[ORM\JoinTable(name: 'player_teams')]
+    #[Groups(['player:detail'])]
     private Collection $teams;
 
-    #[ORM\Column(type: "string", length: 255, nullable: true)]
-    #[Groups([
-        "player:list",
-        "player:admin:details",
-        "player:admin:list",
-        "team:details"
-    ])]
+    #[ORM\Column(type: 'string', length: 255, nullable: true)]
+    #[Groups(['player:detail', 'player:list', 'team:detail'])]
     private ?string $firstName;
 
-    #[ORM\Column(type: "string", length: 255, nullable: true)]
-    #[Groups([
-        "player:list",
-        "player:admin:details",
-        "player:admin:list",
-        "team:details"
-    ])]
+    #[ORM\Column(type: 'string', length: 255, nullable: true)]
+    #[Groups(['player:detail', 'player:list', 'team:detail'])]
     private ?string $lastName;
 
-    #[ORM\Column(type: "string", length: 5, nullable: true)]
-    #[Groups([
-        "player:list",
-        "player:admin:details",
-        "player:admin:list",
-        "team:details"
-    ])]
+    #[ORM\Column(type: 'string', length: 5, nullable: true)]
+    #[Groups(['player:detail', 'player:list', 'team:detail'])]
     private ?string $nationality = null;
 
-    #[ORM\Column(type: "string", length: 255, unique: true)]
-    #[Groups([
-        "player:list",
-        "player:admin:details",
-        "player:admin:list",
-        "team:details"
-    ])]
+    #[ORM\Column(type: 'string', length: 255, unique: true)]
+    #[Groups(['player:detail', 'player:list', 'team:detail'])]
     private string $slug;
 
-    #[ORM\Column(type: "string", length: 255, nullable: true)]
-    #[Groups([
-        "player:list",
-        "player:admin:details",
-        "player:admin:list",
-        "team:details"
-    ])]
+    #[ORM\Column(type: 'string', length: 255, nullable: true)]
+    #[Groups(['player:detail', 'player:list', 'team:detail'])]
     private ?string $image;
 
-    #[ORM\Column(type: "date", nullable: true)]
-    #[Groups([
-        "player:list",
-        "player:admin:details",
-        "player:admin:list",
-        "team:details"
-    ])]
-    private ?\DateTimeInterface $birthday = null;
+    #[ORM\Column(type: 'date_immutable', nullable: true)]
+    #[Groups(['player:detail'])]
+    private ?\DateTimeImmutable $birthday = null;
 
-    #[ORM\Column(type: "integer", nullable: true)]
-    #[Groups([
-        "player:list",
-        "player:admin:details",
-        "player:admin:list",
-        "team:details"
-    ])]
+    #[ORM\Column(type: 'integer', nullable: true)]
+    #[Groups(['player:detail', 'team:detail'])]
     private ?int $age = null;
 
-    #[ORM\Column(type: "json", nullable: true, options: ["jsonb" => true])]
-    #[Groups([
-        "player:list",
-        "player:admin:details",
-        "player:admin:list",
-        "team:details"
-    ])]
+    #[ORM\Column(type: 'json', nullable: true, options: ['jsonb' => true])]
+    #[Groups(['player:detail', 'player:list', 'team:detail'])]
     private ?array $crosshair = null;
 
-    #[ORM\Column(type: "json", nullable: false, options: ["jsonb" => true])]
-    #[Groups([
-        "player:admin:details",
-        "player:admin:list",
-        "team:details"
-    ])]
+    #[ORM\Column(type: 'json', nullable: false, options: ['jsonb' => true])]
+    #[Groups(['player:detail'])]
     private array $socials = [];
 
-    #[ORM\Column(type: "text", nullable: true)]
-    #[Groups([
-        "player:admin:details",
-        "player:admin:list",
-        "team:details"
-    ])]
+    #[ORM\Column(type: 'text', nullable: true)]
+    #[Groups(['player:detail'])]
     private ?string $bio = null;
 
     #[ORM\ManyToMany(targetEntity: Skin::class)]
-    #[ORM\JoinTable(name: "player_skins")]
-    #[Groups([
-        "player:admin:details",
-        "player:admin:list"
-    ])]
+    #[ORM\JoinTable(name: 'player_skins')]
+    #[Groups(['player:detail'])]
     private Collection $skins;
 
-    #[ORM\Column(type: "decimal", precision: 12, scale: 4, nullable: true)]
-    #[Groups([
-        "player:admin:list"
-    ])]
+    #[ORM\Column(type: 'decimal', precision: 12, scale: 4, nullable: true)]
+    #[Groups(['player:detail', 'player:list'])]
     private ?string $totalWon = null;
 
-    #[ORM\Column(type: "json", nullable: true, options: ["jsonb" => true])]
-    #[Groups([
-        "player:admin:list"
-    ])]
+    #[ORM\Column(type: 'json', nullable: true, options: ['jsonb' => true])]
+    #[Groups(['player:detail', 'team:detail'])]
     private ?array $stats = null;
 
     #[ORM\ManyToMany(targetEntity: Tournament::class, mappedBy: 'players', cascade: ['persist'])]
     private Collection $playerTournaments;
 
-    #[ORM\Column(type: "json", nullable: true, options: ["jsonb" => true])]
+    #[ORM\Column(type: 'json', nullable: true, options: ['jsonb' => true])]
     private ?array $lastGames = null;
 
-    #[ORM\ManyToMany(targetEntity: Game::class, mappedBy: "players")]
-    #[Groups([
-        "player:details"
-    ])]
-    #[MaxDepth(1)]
+    #[ORM\ManyToMany(targetEntity: Game::class, mappedBy: 'players')]
     private Collection $games;
 
     public function __construct()
@@ -194,12 +112,12 @@ class Player
 
     public function getPandascoreId(): string
     {
-        return $this->pandascore_id;
+        return $this->pandascoreId;
     }
 
-    public function setPandascoreId(string $pandascore_id): void
+    public function setPandascoreId(string $pandascoreId): void
     {
-        $this->pandascore_id = $pandascore_id;
+        $this->pandascoreId = $pandascoreId;
     }
 
     public function getName(): string
@@ -314,12 +232,12 @@ class Player
         $this->image = $image;
     }
 
-    public function getBirthday(): ?\DateTimeInterface
+    public function getBirthday(): ?\DateTimeImmutable
     {
         return $this->birthday;
     }
 
-    public function setBirthday(?\DateTimeInterface $birthday): void
+    public function setBirthday(?\DateTimeImmutable $birthday): void
     {
         $this->birthday = $birthday;
     }
@@ -383,7 +301,7 @@ class Player
     {
         if (!$this->playerTournaments->contains($tournament)) {
             $this->playerTournaments->add($tournament);
-            $tournament->addPlayer($this);
+//            $tournament->addPlayer($this);
         }
         return $this;
     }

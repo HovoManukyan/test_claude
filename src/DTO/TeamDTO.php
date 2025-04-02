@@ -6,13 +6,19 @@ use App\Entity\Game;
 use App\Entity\Team;
 use App\Entity\Player;
 use Doctrine\Common\Collections\Collection;
+use Symfony\Component\Serializer\Attribute\Groups;
 
 class TeamDTO
 {
+    #[Groups(['player:list'])]
     public int $id;
+    #[Groups(['player:list'])]
     public string $pandascoreId;
+    #[Groups(['player:list'])]
     public string $name;
+    #[Groups(['player:list'])]
     public string $slug;
+    #[Groups(['player:list'])]
     public ?string $image;
     public ?string $bio;
     public array $socials;

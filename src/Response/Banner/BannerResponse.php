@@ -49,4 +49,24 @@ class BannerResponse
             promoText: $banner->getPromoText()
         );
     }
+
+    /**
+     * Create from array data
+     *
+     * @param array $data Banner data
+     * @return self Response DTO
+     */
+    public static function fromArray(array $data): self
+    {
+        return new self(
+            id: $data['id'],
+            title: $data['title'],
+            type: $data['type'],
+            buttonText: $data['buttonText'],
+            buttonLink: $data['buttonLink'],
+            pages: $data['pages'],
+            image: $data['image'] ?? null,
+            promoText: $data['promoText'] ?? null
+        );
+    }
 }

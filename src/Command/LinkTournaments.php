@@ -22,8 +22,9 @@ class LinkTournaments extends Command
 {
     private const BATCH_SIZE = 10;
 
-    public function __construct(private readonly EntityManagerInterface $entityManager)
-    {
+    public function __construct(
+        private readonly EntityManagerInterface $entityManager,
+    ) {
         parent::__construct();
     }
 

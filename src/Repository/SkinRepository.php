@@ -18,4 +18,18 @@ class SkinRepository extends ServiceEntityRepository
     {
         parent::__construct($registry, Skin::class);
     }
+
+    public function getSearchQueryBuilder(?string $name)
+    {
+        $qb = $this->createQueryBuilder('s');
+        if ($name) {
+            $name = str_replace(['%', '_'], '', $name);
+
+            $qb->andWhere(
+                $qb->expr()->like('s.name', ':name')
+            )
+                ->setParameter('name', '%' . strtolower($name) . '%');
+        }
+        return $qb->orderBy('s.name', 'ASC');
+    }
 }

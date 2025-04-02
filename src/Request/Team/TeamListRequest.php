@@ -8,33 +8,66 @@ use Symfony\Component\Validator\Constraints as Assert;
 
 final class TeamListRequest
 {
-    public function __construct(
-        #[Assert\GreaterThanOrEqual(1, message: "Page must be at least 1")]
-        public readonly int $page = 1,
+    #[Assert\Positive]
+    public ?string $page = null;
 
-        #[Assert\Range(
-            notInRangeMessage: "Limit must be between {{ min }} and {{ max }}",
-            min: 1,
-            max: 100
-        )]
-        public readonly int $limit = 10,
+    #[Assert\Range(min: 1, max: 1000)]
+    public ?string $limit = null;
 
-        #[Assert\Length(
-            max: 255,
-            maxMessage: "Name cannot be longer than {{ limit }} characters"
-        )]
-        public readonly ?string $name = null,
+    #[Assert\Length(max: 255)]
+    public ?string $name = null;
 
-        #[Assert\All([
-            new Assert\NotBlank(message: "Locale cannot be blank"),
-            new Assert\Length(
-                min: 2,
-                max: 5,
-                minMessage: "Locale must be at least {{ limit }} characters",
-                maxMessage: "Locale cannot be longer than {{ limit }} characters"
-            )
-        ])]
-        public readonly array $locale = [],
-    ) {
+    #[Assert\All([
+        new Assert\Type(type: 'string')
+    ])]
+    public ?array $locale = null;
+
+    public function getPage(): int
+    {
+        if (!$this->page) {
+            return 1;
+        }
+
+        return (int)$this->page;
     }
+
+    public function setPage(?string $page): void
+    {
+        $this->page = $page;
+    }
+
+    public function getLimit(): int
+    {
+        if (!$this->limit) {
+            return 10;
+        }
+
+        return (int)$this->limit;
+    }
+
+    public function setLimit(?string $limit): void
+    {
+        $this->limit = $limit;
+    }
+
+    public function getName(): ?string
+    {
+        return $this->name;
+    }
+
+    public function setName(?string $name): void
+    {
+        $this->name = $name;
+    }
+
+    public function getLocale(): ?array
+    {
+        return $this->locale;
+    }
+
+    public function setLocale(?array $locale): void
+    {
+        $this->locale = $locale;
+    }
+
 }

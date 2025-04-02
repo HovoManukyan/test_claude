@@ -6,7 +6,6 @@ namespace App\Response\Player;
 
 use App\Entity\Player;
 use App\Response\Team\TeamShortResponse;
-use Doctrine\Common\Collections\Collection;
 
 final class PlayerResponse
 {
@@ -48,6 +47,9 @@ final class PlayerResponse
 
     /**
      * Создает объект ответа из сущности
+     *
+     * @param Player $player Сущность игрока
+     * @return self Объект ответа
      */
     public static function fromEntity(Player $player): self
     {
@@ -71,139 +73,41 @@ final class PlayerResponse
     }
 
     /**
-     * Обрабатывает последние игры игрока
+     * Создает объект ответа из массива данных
+     *
+     * @param array $data Массив данных
+     * @return self Объект ответа
      */
-    private static function getPlayerLastGames(Player $player): ?array
+    public static function fromArray(array $data): self
     {
-        $team = $player->getCurrentTeam();
-        if (!$team) {
-            return null;
+        // Проверяем и преобразуем birthday, если это объект DateTime
+        $birthday = $data['birthday'] ?? null;
+        if ($birthday instanceof \DateTime || $birthday instanceof \DateTimeImmutable) {
+            $birthday = $birthday->format('Y-m-d');
         }
 
-        // Получаем все игры команды
-        $teamAllGames = $team->getGames();
-        $teamLastGames = $team->getLastGames();
-
-        // Собираем ID последних игр
-        $lastGameIds = [];
-        if (is_array($teamLastGames)) {
-            foreach ($teamLastGames as $gameData) {
-                if (isset($gameData['id'])) {
-                    $lastGameIds[] = (string)$gameData['id'];
-                }
-            }
+        // Создаем объект текущей команды, если она есть
+        $currentTeam = null;
+        if (isset($data['currentTeam'])) {
+            $currentTeam = TeamShortResponse::fromArray($data['currentTeam']);
         }
 
-        // Фильтруем игры по ID из последних игр
-        $filteredGames = $teamAllGames->filter(function (Game $game) use ($lastGameIds) {
-            return in_array($game->getPandascoreId(), $lastGameIds);
-        });
-
-        // Проверяем, есть ли отфильтрованные игры
-        if ($filteredGames->isEmpty()) {
-            return null;
-        }
-
-        $teamFilteredGames = [];
-        foreach ($filteredGames as $filteredGame) {
-            // Получаем турнир
-            $tournament = $filteredGame->getTournament();
-            if (!$tournament) {
-                continue;
-            }
-
-            $teams = $filteredGame->getTeams();
-
-            $teamFilteredGame = [
-                'tournamentName' => $tournament->getName(),
-                'tournamentSlug' => $tournament->getSlug(),
-                'current_team_name' => $team->getName(),
-                'opponent_team_name' => 'T',
-                'begin_at' => $tournament->getBeginAt()?->format('d.m.Y'),
-                'map' => $filteredGame->getMap(),
-                'match' => [],
-                'results' => [
-                    'current_team' => 0,
-                    'opponent' => 0
-                ]
-            ];
-
-            $round_score = $filteredGame->getRoundsScore();
-            $round_data = $filteredGame->getRounds();
-            $results = $filteredGame->getResults();
-            $teamWins = 0;
-            $opponentWins = 0;
-
-            if (is_array($round_data)) {
-                foreach ($round_data as $round) {
-                    if (isset($round['winner_team']) && $round['winner_team'] == $team->getPandascoreId()) {
-                        $teamWins++;
-                    } else {
-                        $opponentWins++;
-                    }
-                }
-            }
-
-            $teamFilteredGame['score'] = [
-                'current_team' => $teamWins,
-                'opponent' => $opponentWins
-            ];
-
-            if (is_array($round_score)) {
-                foreach ($round_score as $score) {
-                    // Если это текущая команда
-                    if (isset($score['team_id']) && $score['team_id'] == $team->getPandascoreId()) {
-                        $teamFilteredGame['match']['current_team'] = [
-                            'logo' => $team->getImage(),
-                            'name' => $team->getName(),
-                            'slug' => $team->getSlug(),
-                            'score' => $score['score'] ?? 0
-                        ];
-                    } else {
-                        // Ищем команду оппонента по ID
-                        $opponent = null;
-
-                        // Проверяем, что $teams - это коллекция
-                        if ($teams instanceof Collection && isset($score['team_id'])) {
-                            $opponent = $teams->filter(function ($teamObj) use ($score) {
-                                return $teamObj->getPandascoreId() == $score['team_id'];
-                            })->first();
-                        }
-
-                        // Если оппонент найден
-                        if ($opponent) {
-                            $teamFilteredGame['opponent_team_name'] = $opponent->getName();
-                            $teamFilteredGame['match']['opponent'] = [
-                                'logo' => $opponent->getImage(),
-                                'name' => $opponent->getName(),
-                                'slug' => $opponent->getSlug(),
-                                'score' => $score['score'] ?? 0
-                            ];
-                        } else {
-                            // Если оппонент не найден, добавляем только счет
-                            $teamFilteredGame['match']['opponent'] = [
-                                'score' => $score['score'] ?? 0
-                            ];
-                        }
-                    }
-                }
-            }
-
-            if (is_array($results)) {
-                foreach ($results as $result) {
-                    if (isset($result['team_id'])) {
-                        if ($result['team_id'] == $team->getPandascoreId()) {
-                            $teamFilteredGame['results']['current_team'] = $result['score'] ?? 0;
-                        } else {
-                            $teamFilteredGame['results']['opponent'] = $result['score'] ?? 0;
-                        }
-                    }
-                }
-            }
-
-            $teamFilteredGames[] = $teamFilteredGame;
-        }
-
-        return $teamFilteredGames;
+        return new self(
+            id: $data['id'],
+            name: $data['name'],
+            slug: $data['slug'],
+            firstName: $data['firstName'] ?? null,
+            lastName: $data['lastName'] ?? null,
+            nationality: $data['nationality'] ?? null,
+            image: $data['image'] ?? null,
+            birthday: $birthday, // Теперь это гарантированно строка или null
+            age: $data['age'] ?? null,
+            crosshair: $data['crosshair'] ?? null,
+            socials: $data['socials'] ?? [],
+            bio: $data['bio'] ?? null,
+            currentTeam: $currentTeam,
+            stats: $data['stats'] ?? null,
+            lastGames: $data['lastGames'] ?? null,
+        );
     }
 }

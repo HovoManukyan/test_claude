@@ -22,10 +22,9 @@ class FetchPlayerImagesCommand extends Command
     private const IMAGE_PATH = 'public/cdn/players/';
 
     public function __construct(
-        private readonly HttpClientInterface    $httpClient,
-        private readonly EntityManagerInterface $entityManager
-    )
-    {
+        private readonly HttpClientInterface $httpClient,
+        private readonly EntityManagerInterface $entityManager,
+    ) {
         parent::__construct();
     }
 

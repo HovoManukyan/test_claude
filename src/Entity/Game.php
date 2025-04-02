@@ -13,123 +13,128 @@ class Game
 {
     #[ORM\Id]
     #[ORM\GeneratedValue]
-    #[ORM\Column(type: "integer")]
+    #[ORM\Column(type: 'integer')]
     #[Groups([
-        "game:list",
-        "game:details",
-        "team:details:game"
+        'game:list',
+        'game:details',
+        'team:details:game',
+        'team:list'
     ])]
     private int $id;
 
-    #[ORM\Column(type: "string", length: 36, unique: true)]
+    #[ORM\Column(type: 'string', length: 36, unique: true)]
     #[Groups([
-        "game:list",
-        "game:details",
-        "team:details:game"
+        'game:list',
+        'game:details',
+        'team:details:game',
+        'team:list'
     ])]
     private string $pandascore_id;
 
-    #[ORM\Column(type: "string", length: 255)]
+    #[ORM\Column(type: 'string', length: 255)]
     #[Groups([
-        "game:list",
-        "game:details",
-        "team:details:game"
+        'game:list',
+        'game:details',
+        'team:details:game',
+        'team:list'
     ])]
     private string $name;
 
-    #[ORM\Column(type: "json", nullable: true, options: ["jsonb" => true])]
+    #[ORM\Column(type: 'json', nullable: true, options: ['jsonb' => true])]
     #[Groups([
-        "game:details"
+        'game:details',
+        'team:list'
     ])]
     private ?array $match = null;
 
-    #[ORM\Column(type: "json", nullable: true, options: ["jsonb" => true])]
+    #[ORM\Column(type: 'json', nullable: true, options: ['jsonb' => true])]
     #[Groups([
-        "game:details"
+        'game:details'
     ])]
     private ?array $map = null;
 
-    #[ORM\Column(type: "datetime", nullable: true)]
+    #[ORM\Column(type: 'datetime', nullable: true)]
     #[Groups([
-        "game:list",
-        "game:details",
-        "team:details:game"
+        'game:list',
+        'game:details',
+        'team:details:game'
     ])]
     private ?\DateTimeInterface $begin_at = null;
 
-    #[ORM\Column(type: "datetime", nullable: true)]
+    #[ORM\Column(type: 'datetime', nullable: true)]
     #[Groups([
-        "game:list",
-        "game:details",
-        "team:details:game"
+        'game:list',
+        'game:details',
+        'team:details:game'
     ])]
     private ?\DateTimeInterface $end_at = null;
 
-    #[ORM\Column(type: "json", nullable: true, options: ["jsonb" => true])]
+    #[ORM\Column(type: 'json', nullable: true, options: ['jsonb' => true])]
     #[Groups([
-        "game:details"
+        'game:details'
     ])]
     private ?array $winner = null;
 
-    #[ORM\Column(type: "json", nullable: true, options: ["jsonb" => true])]
+    #[ORM\Column(type: 'json', nullable: true, options: ['jsonb' => true])]
     #[Groups([
-        "game:details"
+        'game:details',
+        'team:list'
     ])]
     private ?array $rounds = null;
 
-    #[ORM\Column(type: "json", nullable: true, options: ["jsonb" => true])]
+    #[ORM\Column(type: 'json', nullable: true, options: ['jsonb' => true])]
     #[Groups([
-        "game:list",
-        "game:details",
-        "team:details:game"
+        'game:list',
+        'game:details',
+        'team:details:game'
     ])]
     private ?array $rounds_score = null;
 
-    #[ORM\Column(type: "string", length: 50)]
+    #[ORM\Column(type: 'string', length: 50)]
     #[Groups([
-        "game:list",
-        "game:details",
-        "team:details:game"
+        'game:list',
+        'game:details',
+        'team:details:game'
     ])]
     private string $status = 'unknown';
 
-    #[ORM\Column(type: "json", nullable: true, options: ["jsonb" => true])]
+    #[ORM\Column(type: 'json', nullable: true, options: ['jsonb' => true])]
     #[Groups([
-        "game:details"
+        'game:details'
     ])]
     private ?array $results = null;
 
-    #[ORM\Column(type: "json", nullable: true, options: ["jsonb" => true])]
+    #[ORM\Column(type: 'json', nullable: true, options: ['jsonb' => true])]
     #[Groups([
-        "game:details"
+        'game:details'
     ])]
     private ?array $data = null;
 
-    #[ORM\Column(type: "datetime")]
+    #[ORM\Column(type: 'datetime')]
     private \DateTimeInterface $created_at;
 
 
-    #[ORM\ManyToMany(targetEntity: Team::class, inversedBy: "games")]
-    #[ORM\JoinTable(name: "team_game")]
+    #[ORM\ManyToMany(targetEntity: Team::class, inversedBy: 'games')]
+    #[ORM\JoinTable(name: 'team_game')]
     #[Groups([
-        "game:details"
+        'game:details'
     ])]
-    #[MaxDepth(1)]
+    
     private Collection $teams;
 
-    #[ORM\ManyToMany(targetEntity: Player::class, inversedBy: "games")]
-    #[ORM\JoinTable(name: "player_game")]
+    #[ORM\ManyToMany(targetEntity: Player::class, inversedBy: 'games')]
+    #[ORM\JoinTable(name: 'player_game')]
     #[Groups([
-        "game:details"
+        'game:details'
     ])]
-    #[MaxDepth(1)]
+    
     private Collection $players;
 
-    #[ORM\ManyToOne(targetEntity: Tournament::class, inversedBy: "games")]
+    #[ORM\ManyToOne(targetEntity: Tournament::class, inversedBy: 'games')]
     #[ORM\JoinColumn(nullable: true)]
     #[Groups([
-        "game:list",
-        "game:details"
+        'game:list',
+        'game:details'
     ])]
     private ?Tournament $tournament = null;
 

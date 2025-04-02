@@ -3,35 +3,35 @@
 namespace App\Entity;
 
 use Doctrine\ORM\Mapping as ORM;
-use Symfony\Component\Serializer\Annotation\Groups;
+use Symfony\Component\Serializer\Attribute\Groups;
 
 #[ORM\Entity]
 class Skin
 {
     #[ORM\Id]
     #[ORM\GeneratedValue]
-    #[ORM\Column(type: "integer")]
-    #[Groups(["skin:list", "skin:details", "player:admin:details"])]
+    #[ORM\Column(type: 'integer')]
+    #[Groups(['skin:default', 'skin:list', 'skin:details', 'player:admin:details', 'player:detail'])]
     private int $id;
 
-    #[ORM\Column(type: "string", length: 255)]
-    #[Groups(["skin:list", "skin:details", "player:admin:details"])]
+    #[ORM\Column(type: 'string', length: 255)]
+    #[Groups(['skin:default', 'skin:list', 'skin:details', 'player:admin:details', 'player:detail'])]
     private string $name;
 
-    #[ORM\Column(type: "string", length: 7)]
-    #[Groups(["skin:list", "skin:details", "player:admin:details"])]
+    #[ORM\Column(type: 'string', length: 7)]
+    #[Groups(['skin:default', 'skin:list', 'skin:details', 'player:admin:details', 'player:detail'])]
     private string $color;
 
-    #[ORM\Column(type: "integer", nullable: true)]
-    #[Groups(["skin:list", "skin:details", "player:admin:details"])]
-    private ?int $image_id = null;
+    #[ORM\Column(type: 'integer', nullable: true)]
+    #[Groups(['skin:default', 'skin:list', 'skin:details', 'player:admin:details', 'player:detail'])]
+    private ?int $imageId = null;
 
-    #[ORM\Column(type: "string", length: 255, nullable: true)]
-    #[Groups(["skin:list", "skin:details", "player:admin:details"])]
-    private ?string $skin_link = null;
+    #[ORM\Column(type: 'string', length: 255, nullable: true)]
+    #[Groups(['skin:default', 'skin:list', 'skin:details', 'player:admin:details', 'player:detail'])]
+    private ?string $skinLink = null;
 
-    #[ORM\Column(type: "float", nullable: true)]
-    #[Groups(["skin:list", "skin:details", "player:admin:details"])]
+    #[ORM\Column(type: 'float', nullable: true)]
+    #[Groups(['skin:default', 'skin:list', 'skin:details', 'player:admin:details', 'player:detail'])]
     private ?float $price = null;
 
     // Getters and setters
@@ -64,23 +64,23 @@ class Skin
 
     public function getImageId(): ?int
     {
-        return $this->image_id;
+        return $this->imageId;
     }
 
-    public function setImageId(?int $image_id): self
+    public function setImageId(?int $imageId): self
     {
-        $this->image_id = $image_id;
+        $this->imageId = $imageId;
         return $this;
     }
 
     public function getSkinLink(): ?string
     {
-        return $this->skin_link;
+        return $this->skinLink;
     }
 
-    public function setSkinLink(?string $skin_link): self
+    public function setSkinLink(?string $skinLink): self
     {
-        $this->skin_link = $skin_link;
+        $this->skinLink = $skinLink;
         return $this;
     }
 

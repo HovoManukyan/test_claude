@@ -1,4 +1,10 @@
 doctrine:
   dbal:
-    logging: true
+    logging: false
     profiling: true
+  orm:
+    entity_managers:
+      default:
+        auto_mapping: true
+        # отключаем SQL логгер
+        mappings: ~

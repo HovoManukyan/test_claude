@@ -1,77 +1,75 @@
 <?php
+
 namespace App\Controller\Admin;
 
+use App\Doctrine\Paginator;
+use App\Entity\Team;
+use App\Repository\TeamRepository;
+use App\Request\Team\TeamListRequest;
+use App\Request\Team\TeamUpdateRequest;
 use App\Service\TeamService;
+use App\Trait\HttpControllerTrait;
+use Symfony\Bridge\Doctrine\Attribute\MapEntity;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
-use Symfony\Component\HttpFoundation\Request;
-use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpKernel\Attribute\MapQueryString;
+use Symfony\Component\HttpKernel\Attribute\MapRequestPayload;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\Serializer\SerializerInterface;
 
 #[Route('/teams')]
 class TeamController extends AbstractController
 {
-    private TeamService $teamService;
-    private SerializerInterface $serializer;
+    use HttpControllerTrait;
 
-    public function __construct(TeamService $teamService, SerializerInterface $serializer)
+    public function __construct(
+        private readonly TeamService         $teamService,
+        private readonly SerializerInterface $serializer,
+    )
     {
-        $this->teamService = $teamService;
-        $this->serializer = $serializer;
     }
 
     #[Route('', methods: ['GET'])]
-    public function getList(Request $request): JsonResponse
+    public function getList(
+        #[MapQueryString] TeamListRequest $request,
+        TeamRepository                    $repository,
+    ): JsonResponse
     {
-        $page = (int) $request->query->get('page', 1);
-        $limit = (int) $request->query->get('limit', 10);
-        $location = $request->query->get('location');
-        $name = $request->query->get('name');
+        $page = $request->getPage();
+        $limit = $request->getLimit();
+        $name = $request->getName();
+        $locale = $request->getLocale();
 
-        $result = $this->teamService->getAllTeamsForAdmin($page, $limit, $location, $name);
+        $qb = $repository->getSearchQueryBuilder($name, $locale);
+        $paginator = new Paginator($qb, $limit);
+        $results = $paginator->paginate($page)->getResults();
 
-        return new JsonResponse([
-            'data' => $this->serializer->normalize($result['data'], null, ['groups' => 'team:list']),
-            'meta' => [
-                'total' => $result['total'],
-                'page' => $page,
-                'limit' => $limit,
-                'pages' => $result['pages']
-            ]
-        ]);
+        return $this->successResponse([
+            'data' => $results,
+            'meta' => $paginator->getMetadata()
+        ], ['paginator', 'team:list']);
     }
 
     #[Route('/{slug}', methods: ['GET'])]
-    public function getTeam(string $slug): JsonResponse
+    public function getTeam(
+        #[MapEntity(mapping: ['slug' => 'slug'])] Team $team
+    ): JsonResponse
     {
-        $team = $this->teamService->getTeamBySlug($slug);
-        if (!$team) {
-            return new JsonResponse(['error' => 'Team not found'], Response::HTTP_NOT_FOUND);
-        }
-
-        return new JsonResponse(
-            $this->serializer->normalize($team, null, ['groups' => 'team:details']),
-            Response::HTTP_OK
-        );
+        return $this->successResponse([
+            $team,
+        ], ['team:detail']);
     }
 
     #[Route('/update/{id}', name: 'update_team', methods: ['PATCH'])]
-    public function updateTeam(int $id, Request $request): JsonResponse
+    public function updateTeam(
+        #[MapEntity(mapping: ['id' => 'id'])] Team $team,
+        #[MapRequestPayload] TeamUpdateRequest     $request,
+        TeamService                                $teamService
+    ): JsonResponse
     {
-        $data = json_decode($request->getContent(), true);
-        $bio = $data['bio'] ?? null;
-        $socials = $data['socials'] ?? null;
-
-        $team = $this->teamService->updateTeam($id, $bio, $socials);
-
-        if (!$team) {
-            return new JsonResponse(['error' => 'Team not found'], Response::HTTP_NOT_FOUND);
-        }
-
-        return new JsonResponse(
-            $this->serializer->normalize($team, null, ['groups' => 'team:details']),
-            Response::HTTP_OK
-        );
+        $updatedTeam = $teamService->updateTeam($team, $request);
+        return $this->successResponse([
+            $updatedTeam,
+        ], ['team:detail']);
     }
 }

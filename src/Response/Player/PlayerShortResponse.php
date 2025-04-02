@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Response\Player;
 
 use App\Entity\Player;
-use App\Response\Team\TeamShortResponse;
 
 final class PlayerShortResponse
 {
@@ -27,6 +26,9 @@ final class PlayerShortResponse
 
     /**
      * Создает объект ответа из сущности
+     *
+     * @param Player $player Сущность игрока
+     * @return self Объект ответа
      */
     public static function fromEntity(Player $player): self
     {
@@ -36,6 +38,23 @@ final class PlayerShortResponse
             slug: $player->getSlug(),
             image: $player->getImage(),
             nationality: $player->getNationality(),
+        );
+    }
+
+    /**
+     * Создает объект ответа из массива данных
+     *
+     * @param array $data Массив данных
+     * @return self Объект ответа
+     */
+    public static function fromArray(array $data): self
+    {
+        return new self(
+            id: $data['id'],
+            name: $data['name'],
+            slug: $data['slug'],
+            image: $data['image'] ?? null,
+            nationality: $data['nationality'] ?? null,
         );
     }
 }

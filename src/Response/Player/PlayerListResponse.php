@@ -77,4 +77,33 @@ final class PlayerListResponse
             selectedTeams: $teamResponses,
         );
     }
+
+    /**
+     * Создает объект ответа из массива данных
+     *
+     * @param array $data Массив данных
+     * @return self Объект ответа
+     */
+    public static function fromArray(array $data): self
+    {
+        $players = [];
+        foreach ($data['paginatedPlayers']['items'] as $playerData) {
+            $players[] = PlayerResponse::fromArray($playerData);
+        }
+
+        $selectedTeams = null;
+        if (isset($data['teams']) && is_array($data['teams'])) {
+            $selectedTeams = [];
+            foreach ($data['teams'] as $teamData) {
+                $selectedTeams[] = TeamShortResponse::fromArray($teamData);
+            }
+        }
+
+        return new self(
+            players: $players,
+            meta: $data['paginatedPlayers']['meta'],
+            banner: isset($data['banner']) ? BannerResponse::fromArray($data['banner']) : null,
+            selectedTeams: $selectedTeams,
+        );
+    }
 }

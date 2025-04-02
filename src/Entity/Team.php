@@ -8,124 +8,77 @@ use Doctrine\ORM\Mapping as ORM;
 use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\Common\Collections\Collection;
 use Symfony\Component\Serializer\Attribute\Groups;
-use Symfony\Component\Serializer\Attribute\MaxDepth;
 use Symfony\Component\Validator\Constraints as Assert;
-use Symfony\Component\Serializer\Annotation\Ignore;
 
 #[ORM\Entity(repositoryClass: TeamRepository::class)]
-#[ORM\Table(name: "team")]
+#[ORM\Table(name: 'team')]
 #[ORM\HasLifecycleCallbacks]
 class Team extends AbstractEntity
 {
     #[ORM\Id]
     #[ORM\GeneratedValue]
-    #[ORM\Column(type: "integer")]
-    #[Groups([
-        "team:list",
-        "team:details",
-        "player:details:team",
-        "game:details:team"
-    ])]
+    #[ORM\Column(type: 'integer')]
+    #[Groups(['team:list', 'player:list', 'player:detail'])]
     private int $id;
 
-    #[ORM\Column(type: "string", length: 36, unique: true)]
-    #[Groups([
-        "team:list",
-        "team:details",
-        "player:details:team",
-        "game:details:team"
-    ])]
+    #[ORM\Column(type: 'string', length: 36, unique: true)]
+    #[Groups(['team:list', 'player:list', 'player:detail'])]
     private string $pandascoreId;
 
-    #[ORM\Column(type: "string", length: 255)]
+    #[ORM\Column(type: 'string', length: 255)]
     #[Assert\NotBlank]
-    #[Groups([
-        "team:list",
-        "team:details",
-        "player:details:team",
-        "game:details:team"
-    ])]
+    #[Groups(['team:list', 'player:list', 'player:detail', 'team:detail'])]
     private string $name;
 
-    #[ORM\Column(type: "string", length: 255, unique: true)]
+    #[ORM\Column(type: 'string', length: 255, unique: true)]
     #[Assert\NotBlank]
-    #[Groups([
-        "team:list",
-        "team:details",
-        "player:details:team",
-        "game:details:team"
-    ])]
+    #[Groups(['team:list', 'player:list', 'player:detail', 'team:detail'])]
     private string $slug;
 
-    #[ORM\Column(type: "string", length: 255, nullable: true)]
-    #[Groups([
-        "team:list",
-        "team:details",
-        "player:details:team",
-        "game:details:team"
-    ])]
+    #[ORM\Column(type: 'string', length: 255, nullable: true)]
+    #[Groups(['team:list', 'player:detail', 'team:detail'])]
     private ?string $acronym = null;
 
-    #[ORM\Column(type: "string", length: 255, nullable: true)]
-    #[Groups([
-        "team:list",
-        "team:details",
-        "player:details:team",
-        "game:details:team"
-    ])]
+    #[ORM\Column(type: 'string', length: 255, nullable: true)]
+    #[Groups(['team:list', 'player:detail', 'player:list', 'team:detail'])]
     private ?string $image = null;
 
-    #[ORM\Column(type: "text", nullable: true)]
-    #[Groups([
-        "team:details",
-        "team:edit"
-    ])]
+    #[ORM\Column(type: 'text', nullable: true)]
+    #[Groups(['team:detail'])]
     private ?string $bio = null;
 
-    #[ORM\Column(type: "json", options: ["jsonb" => true])]
-    #[Assert\Type("array")]
-    #[Groups([
-        "team:details",
-        "team:edit"
-    ])]
+    #[ORM\Column(type: 'json', options: ['jsonb' => true])]
+    #[Assert\Type('array')]
+    #[Groups(['team:detail'])]
     private array $socials = [];
 
-    #[ORM\Column(type: "string", length: 5, nullable: true)]
-    #[Groups([
-        "team:list",
-        "team:details",
-        "player:details:team",
-        "game:details:team"
-    ])]
+    #[ORM\Column(type: 'string', length: 5, nullable: true)]
+    #[Groups(['player:detail', 'team:detail'])]
     private ?string $location = null;
 
-    #[ORM\OneToMany(targetEntity: Player::class, mappedBy: "currentTeam")]
-    #[Groups([
-        "team:details"
-    ])]
-    #[MaxDepth(1)]
+    #[ORM\OneToMany(targetEntity: Player::class, mappedBy: 'currentTeam')]
+    #[Groups(['team:detail'])]
     private Collection $players;
 
     #[ORM\ManyToMany(targetEntity: Tournament::class, mappedBy: 'teams', cascade: ['persist'])]
+    #[Groups(['team:list'])]
     private Collection $teamTournaments;
 
-    #[ORM\Column(type: "json", nullable: true, options: ["jsonb" => true])]
+    #[ORM\Column(type: 'json', nullable: true, options: ['jsonb' => true])]
+    #[Groups(['team:detail', 'team:list'])]
     private ?array $stats = null;
 
-    #[ORM\Column(type: "json", nullable: true, options: ["jsonb" => true])]
+    #[ORM\Column(type: 'json', nullable: true, options: ['jsonb' => true])]
     private ?array $lastGames = null;
 
     #[ORM\ManyToMany(targetEntity: Game::class, mappedBy: 'teams')]
-    #[Groups([
-        "team:details"
-    ])]
-    #[MaxDepth(1)]
+    #[Groups(['team:list'])]
     private Collection $games;
 
-    #[ORM\Column(type: "datetime_immutable")]
+    #[ORM\Column(type: 'datetime_immutable')]
     protected DateTimeImmutable $createdAt;
 
-    #[ORM\Column(type: "datetime_immutable", nullable: true)]
+    #[ORM\Column(type: 'datetime_immutable', nullable: true)]
     protected ?DateTimeImmutable $updatedAt = null;
 
     public function __construct()
@@ -234,49 +187,9 @@ class Team extends AbstractEntity
         return $this->players;
     }
 
-    public function addPlayer(Player $player): self
-    {
-        if (!$this->players->contains($player)) {
-            $this->players[] = $player;
-            $player->setCurrentTeam($this);
-        }
-
-        return $this;
-    }
-
-    public function removePlayer(Player $player): self
-    {
-        if ($this->players->removeElement($player)) {
-            if ($player->getCurrentTeam() === $this) {
-                $player->setCurrentTeam(null);
-            }
-        }
-
-        return $this;
-    }
-
     public function getTeamTournaments(): Collection
     {
         return $this->teamTournaments;
-    }
-
-    public function addTournament(Tournament $tournament, bool $updateTournament = true): self
-    {
-        if (!$this->teamTournaments->contains($tournament)) {
-            $this->teamTournaments->add($tournament);
-
-            if ($updateTournament) {
-                $tournament->addTeam($this, false);
-            }
-        }
-
-        return $this;
-    }
-
-    public function removeTournament(Tournament $tournament): self
-    {
-        $this->teamTournaments->removeElement($tournament);
-        return $this;
     }
 
     public function getStats(): ?array

@@ -22,12 +22,30 @@ final class PlayerDetailResponse
 
     /**
      * Создает объект ответа из сущностей
+     *
+     * @param Player $player Сущность игрока
+     * @param Banner|null $banner Сущность баннера
+     * @return self Объект ответа
      */
     public static function fromEntities(Player $player, ?Banner $banner): self
     {
         return new self(
             player: PlayerResponse::fromEntity($player),
             banner: $banner ? BannerResponse::fromEntity($banner) : null,
+        );
+    }
+
+    /**
+     * Создает объект ответа из массива данных
+     *
+     * @param array $data Массив данных
+     * @return self Объект ответа
+     */
+    public static function fromArray(array $data): self
+    {
+        return new self(
+            player: PlayerResponse::fromArray($data['player']),
+            banner: isset($data['banner']) ? BannerResponse::fromArray($data['banner']) : null,
         );
     }
 }

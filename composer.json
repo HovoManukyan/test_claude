@@ -19,6 +19,7 @@
     "nelmio/cors-bundle": "^2.5",
     "predis/predis": "^2.3",
     "runtime/frankenphp-symfony": "^0.2.0",
+    "scienta/doctrine-json-functions": "^6.3",
     "symfony/cache": "7.2.*",
     "symfony/console": "7.2.*",
     "symfony/dotenv": "7.2.*",

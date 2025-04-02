@@ -5,45 +5,45 @@ declare(strict_types=1);
 namespace App\Repository;
 
 use App\Entity\Player;
-use Doctrine\ORM\Tools\Pagination\Paginator;
+use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
+use Doctrine\ORM\QueryBuilder;
 use Doctrine\Persistence\ManagerRegistry;
-use Symfony\Component\String\Slugger\SluggerInterface;
 
 /**
- * @extends BaseRepository<Player>
+ * @method Player|null find($id, $lockMode = null, $lockVersion = null)
+ * @method Player|null findOneBy(array $criteria, array $orderBy = null)
+ * @method Player[]    findAll()
+ * @method Player[]    findBy(array $criteria, array $orderBy = null, $limit = null, $offset = null)
  */
-class PlayerRepository extends BaseRepository
+class PlayerRepository extends ServiceEntityRepository
 {
-    public function __construct(
-        ManagerRegistry $registry,
-        private readonly SluggerInterface $slugger,
-    ) {
+    /**
+     * @param ManagerRegistry $registry
+     */
+    public function __construct(ManagerRegistry $registry)
+    {
         parent::__construct($registry, Player::class);
     }
 
     /**
      * Поиск игроков с пагинацией и связями
      *
-     * @param int $page Номер страницы
-     * @param int $limit Элементов на странице
      * @param bool|null $hasCrosshair Фильтр по наличию прицела
      * @param array|null $teamSlugs Фильтр по командам
      * @param string|null $name Фильтр по имени
-     * @return Paginator<Player> Пагинатор с игроками
+     * @return QueryBuilder
      */
-    public function findPaginatedWithRelations(
-        int $page,
-        int $limit,
+    public function getSearchQueryBuilder(
         ?bool $hasCrosshair = null,
         ?array $teamSlugs = null,
         ?string $name = null
-    ): Paginator {
+    ): QueryBuilder {
         $qb = $this->createQueryBuilder('p')
             ->leftJoin('p.currentTeam', 'ct')->addSelect('ct');
 
         // Применяем фильтр по прицелу
         if ($hasCrosshair !== null) {
-            $qb->andWhere($hasCrosshair ? 'p.crosshair IS NOT NULL' : 'p.crosshair IS NULL');
+            $qb->andWhere('p.crosshair IS NOT NULL');
         }
 
         // Применяем фильтр по командам
@@ -53,219 +53,45 @@ class PlayerRepository extends BaseRepository
                 ->setParameter('teamSlugs', $teamSlugs);
         }
 
-        // Применяем фильтр по имени
-        if ($name !== null && $name !== '') {
+        if ($name) {
+            $name = str_replace(['%', '_'], '', $name);
+
             $qb->andWhere(
                 $qb->expr()->orX(
-                    $qb->expr()->like('LOWER(p.firstName)', ':name'),
-                    $qb->expr()->like('LOWER(p.lastName)', ':name'),
-                    $qb->expr()->like('LOWER(p.name)', ':name')
+                    $qb->expr()->like('p.firstName', ':name'),
+                    $qb->expr()->like('p.lastName', ':name'),
+                    $qb->expr()->like('p.name', ':name')
                 )
             )
                 ->setParameter('name', '%' . strtolower($name) . '%');
         }
 
-        // Сортировка по умолчанию
-        $qb->orderBy('p.name', 'ASC');
-
-        // Создаем экземпляр Doctrine Paginator
-        return $this->createPaginator($qb, $page, $limit);
+        return $qb->orderBy('p.name', 'ASC');
     }
 
-    /**
-     * Находит игрока по slug с предзагрузкой всех связей
-     *
-     * @param string $slug Slug игрока
-     * @return Player|null Сущность игрока или null
-     */
-    public function findBySlugWithRelations(string $slug): ?Player
+    function getPlayerImageQueryBuilder(): QueryBuilder
     {
-        return $this->createQueryBuilder('p')
-            ->leftJoin('p.currentTeam', 'ct')->addSelect('ct')
-            ->leftJoin('ct.players', 'ctp', 'WITH', 'ctp.slug != :slug')
-            ->leftJoin('p.teams', 't')->addSelect('t')
-            ->leftJoin('p.skins', 's')->addSelect('s')
-            ->where('p.slug = :slug')
-            ->setParameter('slug', $slug)
-            ->getQuery()
-            ->enableResultCache(3600, 'player_slug_' . $slug)
-            ->getOneOrNullResult();
-    }
-
-    /**
-     * Поиск игроков по ID команды
-     *
-     * @param int $teamId ID команды
-     * @return Player[] Массив игроков
-     */
-    public function findByTeam(int $teamId): array
-    {
-        return $this->createQueryBuilder('p')
-            ->where('p.currentTeam = :teamId')
-            ->setParameter('teamId', $teamId)
-            ->orderBy('p.name', 'ASC')
-            ->getQuery()
-            ->enableResultCache(1800, 'players_by_team_' . $teamId)
-            ->getResult();
-    }
-
-    /**
-     * Поиск игроков с наличием прицела
-     *
-     * @param int $limit Максимальное количество результатов
-     * @return Player[] Массив игроков
-     */
-    public function findWithCrosshair(int $limit = 20): array
-    {
-        return $this->createQueryBuilder('p')
-            ->where('p.crosshair IS NOT NULL')
-            ->orderBy('p.name', 'ASC')
-            ->setMaxResults($limit)
-            ->getQuery()
-            ->enableResultCache(3600, 'players_with_crosshair_' . $limit)
-            ->getResult();
-    }
-
-    /**
-     * Поиск топовых игроков по выигрышам
-     *
-     * @param int $limit Максимальное количество результатов
-     * @return Player[] Массив игроков
-     */
-    public function findTopPlayers(int $limit = 10): array
-    {
-        return $this->createQueryBuilder('p')
-            ->leftJoin('p.currentTeam', 'ct')
-            ->where('p.totalWon IS NOT NULL')
-            ->orderBy('p.totalWon', 'DESC')
-            ->setMaxResults($limit)
-            ->getQuery()
-            ->enableResultCache(3600, 'players_top_' . $limit)
-            ->getResult();
-    }
-
-    /**
-     * Генерирует уникальный slug для игрока
-     *
-     * @param string $name Имя игрока
-     * @param int|null $excludeId ID игрока для исключения (при обновлении)
-     * @return string Уникальный slug
-     */
-    public function generateUniqueSlug(string $name, ?int $excludeId = null): string
-    {
-        $slug = $this->slugger->slug(strtolower($name))->toString();
-
         $qb = $this->createQueryBuilder('p')
-            ->select('p.slug')
-            ->where('p.slug = :slug OR p.slug LIKE :slug_pattern')
-            ->setParameter('slug', $slug)
-            ->setParameter('slug_pattern', $slug . '-%');
-
-        if ($excludeId !== null) {
-            $qb->andWhere('p.id != :excludeId')
-                ->setParameter('excludeId', $excludeId);
-        }
-
-        $existingSlugs = $qb->getQuery()->getResult();
-
-        // Если slug уникален, возвращаем его
-        if (empty($existingSlugs)) {
-            return $slug;
-        }
-
-        // Извлекаем существующие номера
-        $numbers = [];
-        foreach ($existingSlugs as $row) {
-            $existingSlug = $row['slug'];
-            if ($existingSlug === $slug) {
-                $numbers[] = 1;
-            } elseif (preg_match('/' . preg_quote($slug, '/') . '-(\d+)$/', $existingSlug, $matches)) {
-                $numbers[] = (int) $matches[1];
-            }
-        }
-
-        // Находим следующий доступный номер
-        $nextNumber = empty($numbers) ? 1 : max($numbers) + 1;
-
-        return $slug . '-' . $nextNumber;
+            ->where('p.image LIKE :prefix')
+            ->setParameter('prefix', 'https://%');
+        return $qb;
     }
 
-    /**
-     * Поиск игроков по набору ID
-     *
-     * @param array $ids Массив ID игроков
-     * @return Player[] Массив игроков
-     */
-    public function findByIds(array $ids): array
+    public function findByTeamId(int $teamId): array
     {
-        if (empty($ids)) {
-            return [];
-        }
-
         return $this->createQueryBuilder('p')
-            ->where('p.id IN (:ids)')
-            ->setParameter('ids', $ids)
+            ->join('p.teams', 't')
+            ->andWhere('t.id = :id')
+            ->setParameter('id', $teamId)
             ->getQuery()
             ->getResult();
     }
 
-    /**
-     * Поиск игроков по стране
-     *
-     * @param string $nationality Код страны
-     * @param int $limit Максимальное количество результатов
-     * @return Player[] Массив игроков
-     */
-    public function findByNationality(string $nationality, int $limit = 20): array
+    public function findPaginated(int $page, int $limit): array
     {
         return $this->createQueryBuilder('p')
-            ->where('p.nationality = :nationality')
-            ->setParameter('nationality', $nationality)
-            ->orderBy('p.name', 'ASC')
+            ->setFirstResult(($page - 1) * $limit)
             ->setMaxResults($limit)
-            ->getQuery()
-            ->enableResultCache(3600, 'players_by_nationality_' . $nationality . '_' . $limit)
-            ->getResult();
-    }
-
-    /**
-     * Поиск игроков с похожими значениями характеристики
-     *
-     * @param string $field Поле для сравнения
-     * @param mixed $value Значение для сравнения
-     * @param int $limit Максимальное количество результатов
-     * @return Player[] Массив игроков
-     */
-    public function findSimilarByField(string $field, $value, int $limit = 5): array
-    {
-        if (!in_array($field, ['name', 'firstName', 'lastName', 'nationality'])) {
-            throw new \InvalidArgumentException('Invalid field for comparison');
-        }
-
-        $qb = $this->createQueryBuilder('p')
-            ->where("p.{$field} LIKE :value")
-            ->setParameter('value', '%' . $value . '%')
-            ->orderBy('p.name', 'ASC')
-            ->setMaxResults($limit);
-
-        return $qb->getQuery()->getResult();
-    }
-
-    /**
-     * Поиск случайных игроков
-     *
-     * @param int $limit Максимальное количество результатов
-     * @return Player[] Массив игроков
-     */
-    public function findRandom(int $limit = 5): array
-    {
-        $conn = $this->getEntityManager()->getConnection();
-
-        $qb = $this->createQueryBuilder('p');
-
-        $qb->orderBy('RANDOM()');
-
-        return $qb->setMaxResults($limit)
             ->getQuery()
             ->getResult();
     }

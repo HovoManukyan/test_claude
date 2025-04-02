@@ -45,20 +45,20 @@ class Tournament
     #[ORM\Column(type: Types::INTEGER)]
     private int $leagueId;
 
-    #[ORM\Column(type: Types::JSON, nullable: true)]
+    #[ORM\Column(type: Types::JSON, nullable: true, options: ['jsonb' => true])]
     private ?array $league = null;
 
     #[ORM\Column(type: Types::BOOLEAN)]
     private bool $liveSupported;
 
-    #[ORM\Column(type: Types::JSON, nullable: true)]
+    #[ORM\Column(type: Types::JSON, nullable: true, options: ['jsonb' => true])]
     private ?array $matches = null;
 
-    #[ORM\Column(type: Types::JSON, nullable: true)]
+    #[ORM\Column(type: Types::JSON, nullable: true, options: ['jsonb' => true])]
     private ?array $expectedRoster = null;
 
-    #[ORM\Column(type: Types::JSON, nullable: true)]
-    private ?array $parsed_teams = null;
+    #[ORM\Column(type: Types::JSON, nullable: true, options: ['jsonb' => true])]
+    private ?array $parsedTeams = null;
 
     #[ORM\Column(type: Types::STRING, nullable: true)]
     private ?string $prizepool = null;
@@ -69,7 +69,7 @@ class Tournament
     #[ORM\Column(type: Types::INTEGER)]
     private int $serieId;
 
-    #[ORM\Column(type: Types::JSON, nullable: true)]
+    #[ORM\Column(type: Types::JSON, nullable: true, options: ['jsonb' => true])]
     private ?array $serie = null;
 
     #[ORM\Column(type: Types::STRING, nullable: true)]
@@ -92,7 +92,7 @@ class Tournament
     #[ORM\JoinTable(name: 'team_tournaments')]
     private Collection $teams;
 
-    #[ORM\OneToMany(targetEntity: Game::class, mappedBy: "tournament")]
+    #[ORM\OneToMany(targetEntity: Game::class, mappedBy: 'tournament')]
     private Collection $games;
 
 
@@ -253,12 +253,12 @@ class Tournament
 
     public function getParsedTeams(): ?array
     {
-        return $this->parsed_teams;
+        return $this->parsedTeams;
     }
 
-    public function setParsedTeams(?array $parsed_teams): self
+    public function setParsedTeams(?array $parsedTeams): self
     {
-        $this->parsed_teams = $parsed_teams;
+        $this->parsedTeams = $parsedTeams;
         return $this;
     }
 
@@ -352,15 +352,9 @@ class Tournament
 
     public function addPlayer(Player $player): self
     {
-        $existingPlayer = $this->players->filter(function (Player $p) use ($player) {
-            return $p->getPandascoreId() === $player->getPandascoreId();
-        });
-
-        if ($existingPlayer->count() === 0) {
+        if (!$this->players->exists(fn($key, $p) => $p->getPandascoreId() === $player->getPandascoreId())) {
             $this->players->add($player);
-            $player->addTournament($this);
         }
-
         return $this;
     }
 
@@ -370,18 +364,10 @@ class Tournament
     }
 
 
-    public function addTeam(Team $team, bool $updateTeam = true): self
+    public function addTeam(Team $team): self
     {
-        $existingTeam = $this->teams->filter(function (Team $t) use ($team) {
-            return $t->getId() === $team->getId();
-        });
-
-        if ($existingTeam->count() === 0) {
+        if (!$this->teams->exists(fn($key, $t) => $t->getId() === $team->getId())) {
             $this->teams->add($team);
-
-            if ($updateTeam) {
-                $team->addTournament($this, false);
-            }
         }
 
         return $this;
